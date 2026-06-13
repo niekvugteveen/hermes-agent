@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 from hermes_a2a.registry import PeerRegistry
 from hermes_a2a.server import run_standalone
 from hermes_a2a.store import RequestStore
-from hermes_constants import display_hermes_home
 
 
 def cmd_peer(args) -> int:
@@ -91,24 +87,16 @@ def cmd_peer(args) -> int:
         return 0
 
     if action == "pending":
-        pending = store.list_by_status("awaiting_human")
-        if not pending:
-            print("No A2A requests awaiting human approval.")
-            return 0
-        for record in pending:
-            print(
-                f"{record.get('request_id')}: {record.get('type')} "
-                f"from {record.get('from_peer')}"
-            )
+        from hermes_cli.a2a_commands import format_pending_list
+
+        print(format_pending_list(store))
         return 0
 
     if action == "status":
-        record = store.get(args.request_id)
-        if record is None:
-            print(f"Request not found: {args.request_id}")
-            return 1
-        print(json.dumps(record, indent=2))
-        return 0
+        from hermes_cli.a2a_commands import format_request_status
+
+        print(format_request_status(store, args.request_id))
+        return 0 if store.get(args.request_id) else 1
 
     print(f"Unknown peer action: {action}")
     return 1

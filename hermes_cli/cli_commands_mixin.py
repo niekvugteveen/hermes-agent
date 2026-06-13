@@ -1387,6 +1387,16 @@ class CLICommandsMixin:
                    "Use: pending, approve <id>, reject <id>, approval <on|off>.")
         print(out)
 
+    def _handle_peer_command(self, cmd: str):
+        """Handle /peer slash command — review inbound A2A requests."""
+        from hermes_cli.a2a_commands import handle_peer_subcommand
+
+        parts = cmd.strip().split()
+        args = parts[1:] if len(parts) > 1 else []
+        out = handle_peer_subcommand(args)
+        if out is not None:
+            print(out)
+
     def _save_write_approval(self, subsystem: str, enabled: bool):
         """Persist <subsystem>.write_approval to config (for /memory|/skills approval)."""
         from cli import save_config_value

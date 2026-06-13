@@ -7429,6 +7429,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 self._handle_skills_command(cmd_original)
         elif canonical == "memory":
             self._handle_memory_command(cmd_original)
+        elif canonical == "peer":
+            self._handle_peer_command(cmd_original)
         elif canonical == "platforms":
             self._show_gateway_status()
         elif canonical == "status":
