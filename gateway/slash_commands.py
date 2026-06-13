@@ -2106,6 +2106,15 @@ class GatewaySlashCommandsMixin:
                    "reject <id>, approval <on|off>.")
         return out
 
+    async def _handle_peer_command(self, event: MessageEvent) -> str:
+        """Handle /peer — review inbound A2A requests from messaging surfaces."""
+        from hermes_cli.a2a_commands import handle_peer_subcommand
+
+        raw_args = event.get_command_args().strip()
+        args = raw_args.split() if raw_args else []
+        out = handle_peer_subcommand(args)
+        return out or "No output."
+
     async def _handle_skills_command(self, event: MessageEvent) -> str:
         """Handle /skills on the gateway — pending skill-write review only.
 

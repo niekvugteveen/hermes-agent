@@ -5121,6 +5121,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # turn so the agent kicks off the new chat.
         asyncio.create_task(self._handoff_watcher())
 
+        try:
+            from gateway.a2a import start_a2a_on_gateway
+
+            await start_a2a_on_gateway(self)
+        except Exception as exc:
+            logger.warning("A2A peer server failed to start: %s", exc)
+
         logger.info("Press Ctrl+C to stop")
         
         return True
@@ -5779,6 +5786,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             self._running = False
             self._draining = True
+
+            try:
+                from gateway.a2a import stop_a2a_on_gateway
+
+                await stop_a2a_on_gateway()
+            except Exception:
+                logger.debug("A2A server stop failed", exc_info=True)
 
             # Notify all chats with active agents BEFORE draining.
             # Adapters are still connected here, so messages can be sent.
@@ -7184,6 +7198,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if canonical == "memory":
             return await self._handle_memory_command(event)
+
+        if canonical == "peer":
+            return await self._handle_peer_command(event)
 
         if canonical == "skills":
             return await self._handle_skills_command(event)
