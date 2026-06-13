@@ -12,7 +12,13 @@ from hermes_a2a.constants import (
     APPROVE_DENY,
     APPROVE_ONCE,
     REQUEST_KNOWLEDGE,
+    REQUEST_REMINDER,
     REQUEST_SKILL_SHARE,
+)
+from hermes_a2a.cron_proposal import (
+    build_reminder_proposal,
+    create_reminder_job,
+    format_reminder_preview,
 )
 from hermes_a2a.context import (
     get_a2a_from_peer,
@@ -41,6 +47,12 @@ def check_a2a_accept_requirements() -> bool:
     return a2a_context_active() and get_a2a_request_type() == REQUEST_SKILL_SHARE
 
 
+def check_a2a_reminder_requirements() -> bool:
+    from hermes_a2a.context import a2a_context_active
+
+    return a2a_context_active() and get_a2a_request_type() == REQUEST_REMINDER
+
+
 def check_a2a_share_requirements() -> bool:
     return bool(_registry.list_remotes())
 
@@ -50,6 +62,7 @@ def _normalize_decision(raw: str) -> str:
     if text in {
         "send once", "once", "send", "approve", "yes", "allow-once", "allow once",
         "install", "install once", "accept",
+        "create", "create job", "create once",
     }:
         return APPROVE_ONCE
     if text in {"always", "always from this peer", "allow-always", "allow always"}:
@@ -346,6 +359,136 @@ def a2a_accept_skill(
     )
 
 
+def a2a_propose_reminder(
+    schedule: str,
+    message: str,
+    deliver: str = "",
+    name: str = "",
+    summary_for_human: str = "",
+    clarify_callback: Optional[Callable] = None,
+) -> str:
+    """Propose a cron reminder job for human approval, then create it on approve."""
+    request_id = get_a2a_request_id()
+    from_peer = get_a2a_from_peer()
+    request_type = get_a2a_request_type() or REQUEST_REMINDER
+
+    if not request_id:
+        return tool_error("No active A2A request in this session.")
+
+    record = _store.get(request_id)
+    if record is None:
+        return tool_error(f"Unknown A2A request id: {request_id}")
+
+    inbound = record.get("payload") or {}
+    deliver_value = (deliver or "").strip() or str(
+        inbound.get("delivery_hint") or inbound.get("deliver") or ""
+    ).strip()
+    proposal = build_reminder_proposal(
+        schedule=schedule,
+        message=message,
+        deliver=deliver_value or None,
+        name=(name or "").strip() or None,
+        from_peer=from_peer,
+    )
+    if not proposal.get("success"):
+        return json.dumps(proposal, ensure_ascii=False)
+
+    if _registry.trust_is_always(from_peer, request_type):
+        create_result = create_reminder_job(proposal, from_peer=from_peer)
+        if not create_result.get("success"):
+            _store.complete_response(request_id, denied=True, denial_message=create_result.get("error"))
+            return json.dumps(create_result, ensure_ascii=False)
+        job_id = str(create_result.get("job_id") or "")
+        _store.complete_response(
+            request_id,
+            answer=json.dumps({"status": "created", "job_id": job_id}),
+            denied=False,
+            extra={"status": "created", "job_id": job_id},
+        )
+        return json.dumps(
+            {
+                "success": True,
+                "auto_approved": True,
+                "request_id": request_id,
+                "status": "created",
+                "job_id": job_id,
+            },
+            ensure_ascii=False,
+        )
+
+    preview = format_reminder_preview(proposal, from_peer=from_peer)
+    question = summary_for_human.strip() or f"{preview}\n\nCreate this cron job?"
+    choices = ["Create", "Always from this peer", "Deny", "Other"]
+
+    if clarify_callback is None:
+        return tool_error(
+            "Human approval is required but clarify is unavailable in this context."
+        )
+
+    raw, ok = _run_clarify(question, choices, clarify_callback)
+    if not ok:
+        _store.complete_response(request_id, denied=True)
+        return json.dumps(
+            {
+                "success": False,
+                "denied": True,
+                "reason": "no_human_response",
+                "request_id": request_id,
+            },
+            ensure_ascii=False,
+        )
+
+    decision = _normalize_decision(raw)
+    if decision == APPROVE_DENY:
+        _store.complete_response(
+            request_id,
+            denied=True,
+            extra={"status": "denied"},
+        )
+        return json.dumps(
+            {
+                "success": False,
+                "denied": True,
+                "status": "denied",
+                "request_id": request_id,
+            },
+            ensure_ascii=False,
+        )
+    if decision == APPROVE_ALWAYS:
+        _registry.set_trust(from_peer, request_type, "always")
+    elif decision not in {APPROVE_ONCE, APPROVE_ALWAYS}:
+        # "Other" — allow editing schedule/message from free text is out of scope;
+        # proceed with the original proposal unless the user typed a full override
+        # in the clarify response (same pattern as knowledge_request).
+        pass
+
+    _store.mark_awaiting_human(request_id, preview)
+    create_result = create_reminder_job(proposal, from_peer=from_peer)
+    if not create_result.get("success"):
+        _store.complete_response(request_id, denied=True, denial_message=create_result.get("error"))
+        return json.dumps(create_result, ensure_ascii=False)
+
+    job_id = str(create_result.get("job_id") or "")
+    _store.complete_response(
+        request_id,
+        answer=json.dumps({"status": "created", "job_id": job_id}),
+        denied=False,
+        extra={"status": "created", "job_id": job_id},
+    )
+    return json.dumps(
+        {
+            "success": True,
+            "approved": True,
+            "request_id": request_id,
+            "status": "created",
+            "job_id": job_id,
+            "schedule": create_result.get("schedule"),
+            "deliver": create_result.get("deliver"),
+        },
+        ensure_ascii=False,
+    )
+
+
 registry.register(
     name="a2a_propose_response",
     toolset="a2a",
@@ -448,4 +591,51 @@ registry.register(
         clarify_callback=kw.get("clarify_callback"),
     ),
     check_fn=check_a2a_accept_requirements,
+)
+
+registry.register(
+    name="a2a_propose_reminder",
+    toolset="a2a",
+    schema={
+        "name": "a2a_propose_reminder",
+        "description": (
+            "Propose a cron reminder job for the active set_reminder request. "
+            "The local human must approve before the job is created."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "schedule": {
+                    "type": "string",
+                    "description": "Schedule string (30m, every 2h, cron expr, or ISO timestamp).",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Reminder message delivered when the job fires.",
+                },
+                "deliver": {
+                    "type": "string",
+                    "description": "Delivery target (local, telegram, origin, etc.).",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional friendly cron job name.",
+                },
+                "summary_for_human": {
+                    "type": "string",
+                    "description": "Optional approval prompt shown to the human.",
+                },
+            },
+            "required": ["schedule", "message"],
+        },
+    },
+    handler=lambda args, **kw: a2a_propose_reminder(
+        schedule=args.get("schedule", ""),
+        message=args.get("message", ""),
+        deliver=args.get("deliver", ""),
+        name=args.get("name", ""),
+        summary_for_human=args.get("summary_for_human", ""),
+        clarify_callback=kw.get("clarify_callback"),
+    ),
+    check_fn=check_a2a_reminder_requirements,
 )

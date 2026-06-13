@@ -268,6 +268,7 @@ TOOLSETS = {
             "a2a_propose_response",
             "a2a_share_skill",
             "a2a_accept_skill",
+            "a2a_propose_reminder",
         ],
         "includes": [],
     },

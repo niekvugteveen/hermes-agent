@@ -105,6 +105,29 @@ def _build_user_message(envelope: Dict[str, Any]) -> str:
             )
         return "\n".join(lines)
 
+    if request_type == "set_reminder":
+        from hermes_a2a.cron_proposal import parse_reminder_payload
+
+        parsed = parse_reminder_payload(payload)
+        if parsed.get("success"):
+            lines.append(f"Reminder message: {parsed.get('message')}")
+            lines.append(f"Requested schedule: {parsed.get('schedule')}")
+            if parsed.get("delivery_hint"):
+                lines.append(f"Delivery hint: {parsed['delivery_hint']}")
+            if parsed.get("timezone"):
+                lines.append(f"Timezone: {parsed['timezone']}")
+        else:
+            lines.append(f"Raw payload: {payload}")
+        lines.extend(
+            [
+                "",
+                "Draft the cron job (resolve schedule, final message, delivery). "
+                "Call `a2a_propose_reminder` with your proposal. The human must "
+                "approve before the job is created.",
+            ]
+        )
+        return "\n".join(lines)
+
     question = str(payload.get("question") or "").strip()
     context = str(payload.get("context") or "").strip()
     if question:

@@ -1893,6 +1893,20 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 ),
                 next_args,
             )
+    elif function_name == "a2a_propose_reminder":
+        def _execute(next_args: dict) -> Any:
+            from tools.a2a_tool import a2a_propose_reminder as _a2a_propose_reminder
+            return _finish_agent_tool(
+                _a2a_propose_reminder(
+                    schedule=next_args.get("schedule", ""),
+                    message=next_args.get("message", ""),
+                    deliver=next_args.get("deliver", ""),
+                    name=next_args.get("name", ""),
+                    summary_for_human=next_args.get("summary_for_human", ""),
+                    clarify_callback=agent.clarify_callback,
+                ),
+                next_args,
+            )
     elif function_name == "read_terminal":
         def _execute(next_args: dict) -> Any:
             from tools.read_terminal_tool import read_terminal_tool as _read_terminal_tool
