@@ -1367,3 +1367,37 @@ not the specific names.
 
 Reviewers should reject new change-detector tests; authors should convert
 them into invariants before re-requesting review.
+
+---
+
+## Cursor Cloud specific instructions
+
+Environment is provisioned by the startup update script (installs `uv`, runs
+`uv sync --extra all --extra dev`, and `npm install` for the TUI). The notes
+below are the non-obvious things; standard dev/test/lint commands already live
+in the "Development Environment", "Testing", and "TUI Architecture" sections
+above.
+
+- **`uv` lives in `~/.local/bin`.** It is not on `PATH` in a fresh shell. Use
+  `export PATH="$HOME/.local/bin:$PATH"` (or call `~/.local/bin/uv` directly)
+  before any `uv` command.
+- **Python venv is `.venv/`** (uv-managed, Python 3.12). Run tools via
+  `.venv/bin/<tool>` without sourcing, e.g. `.venv/bin/hermes`,
+  `.venv/bin/ruff check .`, or use `scripts/run_tests.sh` (it auto-probes
+  `.venv`).
+- **Running a real agent turn needs an LLM provider key**, which is NOT present
+  in the cloud env by default. Configure one in `~/.hermes/.env` (e.g.
+  `OPENROUTER_API_KEY`) or via `hermes setup`. Lint, typecheck, and the test
+  suite all run fine without any key.
+- **Smoke-testing the agent loop without a real key:** point hermes at any
+  local OpenAI-compatible endpoint with `model.provider: "custom"` +
+  `model.base_url` in a config.yaml, and isolate it with a throwaway
+  `HERMES_HOME` (e.g. `HERMES_HOME=/tmp/hermes_demo .venv/bin/hermes chat -q "…" --yolo`).
+  The chat path uses **SSE streaming**, so a custom endpoint must stream
+  `chat.completion.chunk` events (a non-streaming JSON reply will fail). The
+  auxiliary title-generation call is non-streaming and is best-effort — its
+  failure is logged as a warning and does not affect the main turn.
+- **Test suite is large (~17k tests).** Prefer running targeted directories/files
+  with `scripts/run_tests.sh tests/<dir>` rather than the full suite.
+- **TUI** (`ui-tui/`) is an optional Node surface; `npm run build` and
+  `npm run typecheck` validate it. It is not required for the core Python agent.
