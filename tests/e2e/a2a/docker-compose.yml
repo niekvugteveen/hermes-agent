@@ -1,0 +1,69 @@
+# Manual / CI smoke: two Hermes A2A peers on a Docker bridge network.
+#
+# Quick start:
+#   docker compose -f tests/e2e/a2a/docker-compose.yml up --build -d
+#   curl -s http://127.0.0.1:18765/...  # bob mapped to host 18765
+#
+# Automated pytest (optional):
+#   HERMES_A2A_E2E_DOCKER=1 pytest tests/e2e/a2a/test_bridge_peers.py -m e2e_docker
+
+services:
+  bob-hermes:
+    build:
+      context: ../../..
+      dockerfile: tests/e2e/a2a/Dockerfile
+    container_name: hermes-a2a-bob
+    environment:
+      HERMES_A2A_INBOUND_TOKEN: e2e-shared-secret
+      HERMES_PEER_LOCAL_ID: bob
+    ports:
+      - "127.0.0.1:18765:8765"
+    networks:
+      - a2a-bridge
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "-o",
+          "/dev/null",
+          "-H",
+          "Authorization: Bearer e2e-shared-secret",
+          "-H",
+          "Content-Type: application/json",
+          "-d",
+          '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"health","version":"1"}}}',
+          "http://127.0.0.1:8765/a2a/mcp",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  alice-hermes:
+    build:
+      context: ../../..
+      dockerfile: tests/e2e/a2a/Dockerfile
+    container_name: hermes-a2a-alice
+    environment:
+      HERMES_A2A_INBOUND_TOKEN: e2e-shared-secret
+      HERMES_PEER_LOCAL_ID: alice
+    ports:
+      - "127.0.0.1:18766:8765"
+    networks:
+      - a2a-bridge
+    command:
+      [
+        "python",
+        "/app/serve_peer.py",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8765",
+        "--local-id",
+        "alice",
+      ]
+
+networks:
+  a2a-bridge:
+    driver: bridge
