@@ -260,11 +260,15 @@ TOOLSETS = {
 
     "a2a": {
         "description": (
-            "Agent-to-agent protocol tools — only active during an inbound "
-            "A2A request (peer MCP submit). Used to propose outbound replies "
-            "for human approval before they are returned to the calling peer."
+            "Agent-to-agent protocol tools. Inbound handlers use a2a_propose_response "
+            "or a2a_accept_skill; outbound sharing uses a2a_share_skill when peers "
+            "are paired."
         ),
-        "tools": ["a2a_propose_response"],
+        "tools": [
+            "a2a_propose_response",
+            "a2a_share_skill",
+            "a2a_accept_skill",
+        ],
         "includes": [],
     },
 

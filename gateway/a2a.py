@@ -50,14 +50,63 @@ async def stop_a2a_on_gateway() -> None:
 
 def _build_user_message(envelope: Dict[str, Any]) -> str:
     payload = envelope.get("payload") or {}
-    question = str(payload.get("question") or "").strip()
-    context = str(payload.get("context") or "").strip()
+    request_type = str(envelope.get("type") or "")
+    from_peer = str(envelope.get("from_peer") or "")
+    request_id = str(envelope.get("request_id") or "")
+
     lines = [
-        f"[Agent-to-agent request from peer '{envelope.get('from_peer', '')}']",
-        f"Type: {envelope.get('type', '')}",
-        f"Request ID: {envelope.get('request_id', '')}",
+        f"[Agent-to-agent request from peer '{from_peer}']",
+        f"Type: {request_type}",
+        f"Request ID: {request_id}",
         "",
     ]
+
+    if request_type == "skill_share":
+        mode = str(payload.get("mode") or "push").strip().lower()
+        skill_name = str(payload.get("skill_name") or "").strip()
+        tier = str(payload.get("tier") or "summary").strip()
+        message = str(payload.get("message") or "").strip()
+        artifact = payload.get("artifact") or {}
+
+        if mode == "pull":
+            lines.append(f"Pull request for skill: {skill_name}")
+            lines.append(f"Requested tier: {tier}")
+            if message:
+                lines.append(f"Message: {message}")
+            lines.extend(
+                [
+                    "",
+                    "Bundle the requested skill and call `a2a_share_skill` with "
+                    f"peer_id='{from_peer}', responding_to_pull=true. The human "
+                    "must approve before anything is sent.",
+                ]
+            )
+            return "\n".join(lines)
+
+        from hermes_a2a.artifacts import artifact_preview
+
+        preview = artifact_preview(payload)
+        lines.append(preview)
+        if payload.get("responding_to_pull"):
+            lines.extend(
+                [
+                    "",
+                    "This is the response to a pull you initiated. Call "
+                    "`a2a_accept_skill` to install (approval may be skipped).",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "Review the offer. Call `a2a_accept_skill` to install after "
+                    "the human approves.",
+                ]
+            )
+        return "\n".join(lines)
+
+    question = str(payload.get("question") or "").strip()
+    context = str(payload.get("context") or "").strip()
     if question:
         lines.append(f"Question: {question}")
     if context:
@@ -98,12 +147,17 @@ def _resolve_notify_chat_id(runner: "GatewayRunner") -> str:
 
 
 async def process_a2a_inbound(runner: "GatewayRunner", envelope: Dict[str, Any]) -> None:
-    """Run an isolated A2A agent turn for a knowledge_request."""
+    """Run an isolated A2A agent turn for an inbound peer request."""
     request_id = str(envelope.get("request_id") or "")
     from_peer = str(envelope.get("from_peer") or "")
     request_type = str(envelope.get("type") or "")
     if not request_id:
         return
+
+    payload = envelope.get("payload") or {}
+    skip_inbound = bool(
+        request_type == "skill_share" and payload.get("responding_to_pull")
+    )
 
     session_key = f"agent:main:a2a:peer:{from_peer}"
     user_message = _build_user_message(envelope)
@@ -153,6 +207,7 @@ async def process_a2a_inbound(runner: "GatewayRunner", envelope: Dict[str, Any])
             request_id=request_id,
             from_peer=from_peer,
             request_type=request_type,
+            skip_inbound_approval=skip_inbound,
         )
         try:
             agent = AIAgent(

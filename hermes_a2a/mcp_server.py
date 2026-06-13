@@ -69,14 +69,14 @@ def _handle_submit(request_type: str, from_peer: str, payload_json: str) -> str:
         payload=payload,
     )
 
-    if request_type in {REQUEST_SKILL_SHARE, REQUEST_REMINDER}:
+    if request_type in {REQUEST_REMINDER}:
         return json.dumps(
             {
                 "request_id": record["request_id"],
                 "status": "not_implemented",
                 "message": (
                     f"{request_type} is defined in the protocol but not implemented "
-                    "in this build yet. knowledge_request is supported."
+                    "in this build yet. knowledge_request and skill_share are supported."
                 ),
             },
             indent=2,
@@ -127,7 +127,7 @@ def create_a2a_mcp_server(*, local_id: str = "") -> "FastMCP":
                 "schema_version": 1,
                 "peer_id": _registry.get_local_id(),
                 "supported_types": sorted(SUPPORTED_INBOUND_TYPES),
-                "implemented_types": [REQUEST_KNOWLEDGE],
+                "implemented_types": [REQUEST_KNOWLEDGE, REQUEST_SKILL_SHARE],
             },
             indent=2,
         )
@@ -178,7 +178,7 @@ def _extract_bearer(headers: list) -> str:
 
 
 def _build_auth_middleware(app):
-  """ASGI middleware validating Bearer tokens for A2A inbound calls."""
+    """ASGI middleware validating Bearer tokens for A2A inbound calls."""
 
     async def middleware(scope, receive, send):
         if scope.get("type") != "http":

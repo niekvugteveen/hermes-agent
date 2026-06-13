@@ -1868,6 +1868,31 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 ),
                 next_args,
             )
+    elif function_name == "a2a_share_skill":
+        def _execute(next_args: dict) -> Any:
+            from tools.a2a_tool import a2a_share_skill as _a2a_share_skill
+            return _finish_agent_tool(
+                _a2a_share_skill(
+                    peer_id=next_args.get("peer_id", ""),
+                    skill_name=next_args.get("skill_name", ""),
+                    tier=next_args.get("tier", "summary"),
+                    message=next_args.get("message", ""),
+                    responding_to_pull=bool(next_args.get("responding_to_pull", False)),
+                    summary_for_human=next_args.get("summary_for_human", ""),
+                    clarify_callback=agent.clarify_callback,
+                ),
+                next_args,
+            )
+    elif function_name == "a2a_accept_skill":
+        def _execute(next_args: dict) -> Any:
+            from tools.a2a_tool import a2a_accept_skill as _a2a_accept_skill
+            return _finish_agent_tool(
+                _a2a_accept_skill(
+                    summary_for_human=next_args.get("summary_for_human", ""),
+                    clarify_callback=agent.clarify_callback,
+                ),
+                next_args,
+            )
     elif function_name == "read_terminal":
         def _execute(next_args: dict) -> Any:
             from tools.read_terminal_tool import read_terminal_tool as _read_terminal_tool

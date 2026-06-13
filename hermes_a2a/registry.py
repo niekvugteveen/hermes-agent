@@ -38,7 +38,13 @@ class PeerRegistry:
     """Load/save ``~/.hermes/peers/registry.yaml``."""
 
     def __init__(self, path: Optional[Path] = None) -> None:
-        self.path = path or (peers_dir() / "registry.yaml")
+        self._path_override = path
+
+    @property
+    def path(self) -> Path:
+        if self._path_override is not None:
+            return self._path_override
+        return peers_dir() / "registry.yaml"
 
     def load(self) -> Dict[str, Any]:
         if not self.path.exists():
