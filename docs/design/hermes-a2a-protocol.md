@@ -1,6 +1,6 @@
 # Hermes Agent-to-Agent (A2A) Protocol — Design Spec
 
-**Status:** Draft for review  
+**Status:** Approved (2026-06-13)  
 **Date:** 2026-06-13  
 **Authors:** Brainstorm session (user + agent)
 
@@ -245,15 +245,58 @@ mcp_servers:
 
 ## Docker deployment
 
+Target environment: **two Hermes containers on the same host, Docker bridge network** (container DNS resolves by service name). No TLS required for v1 — Bearer token on the private bridge is sufficient.
+
 Each container:
 
 1. Runs gateway (`hermes gateway` or equivalent).
-2. Exposes A2A MCP HTTP on a published port (e.g. `8765`).
-3. Pairs once: `hermes peer pair alice http://alice-hermes:8765/a2a/mcp <token>`.
+2. Exposes A2A MCP HTTP on port `8765` (`0.0.0.0` bind inside container).
+3. Pairs once from either side with the **container service name** as hostname.
 
-`hermes mcp serve` today is **stdio-only**; v1 implementation adds `--transport http --host 0.0.0.0 --port 8765` to the a2a server (or documents FastMCP HTTP sidecar).
+Example `docker-compose.yml` sketch:
 
-Network: Docker bridge DNS (`bob-hermes`, `alice-hermes`). TLS optional v1.1 (reverse proxy); v1 can be Bearer token on private network.
+```yaml
+services:
+  alice-hermes:
+    image: hermes-agent:latest
+    networks: [hermes-a2a]
+    environment:
+      HERMES_A2A_SERVE: "1"
+      HERMES_A2A_PORT: "8765"
+      HERMES_A2A_PEER_TOKEN: "${ALICE_TOKEN}"
+
+  bob-hermes:
+    image: hermes-agent:latest
+    networks: [hermes-a2a]
+    environment:
+      HERMES_A2A_SERVE: "1"
+      HERMES_A2A_PORT: "8765"
+      HERMES_A2A_PEER_TOKEN: "${BOB_TOKEN}"
+
+networks:
+  hermes-a2a:
+    driver: bridge
+```
+
+Pairing (run inside `alice-hermes`):
+
+```bash
+hermes peer pair bob http://bob-hermes:8765/a2a/mcp "${BOB_TOKEN}"
+```
+
+Caller config on Alice (`config.yaml`):
+
+```yaml
+mcp_servers:
+  bob:
+    url: "http://bob-hermes:8765/a2a/mcp"
+    headers:
+      Authorization: "Bearer ${BOB_TOKEN}"
+```
+
+`hermes mcp serve` today is **stdio-only**; v1 adds HTTP transport to the A2A server (`hermes peer serve` or `hermes mcp serve --transport http`).
+
+WAN / TLS deferred to v1.1 (reverse proxy in front of published ports).
 
 ## Session model
 
