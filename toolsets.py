@@ -258,6 +258,20 @@ TOOLSETS = {
         "includes": []
     },
 
+    "a2a": {
+        "description": (
+            "Agent-to-agent protocol tools. Inbound handlers use a2a_propose_response "
+            "or a2a_accept_skill; outbound sharing uses a2a_share_skill when peers "
+            "are paired."
+        ),
+        "tools": [
+            "a2a_propose_response",
+            "a2a_share_skill",
+            "a2a_accept_skill",
+        ],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "
