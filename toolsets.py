@@ -258,6 +258,16 @@ TOOLSETS = {
         "includes": []
     },
 
+    "a2a": {
+        "description": (
+            "Agent-to-agent protocol tools — only active during an inbound "
+            "A2A request (peer MCP submit). Used to propose outbound replies "
+            "for human approval before they are returned to the calling peer."
+        ),
+        "tools": ["a2a_propose_response"],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "
