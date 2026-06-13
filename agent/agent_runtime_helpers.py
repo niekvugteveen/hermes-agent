@@ -1857,6 +1857,17 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 ),
                 next_args,
             )
+    elif function_name == "a2a_propose_response":
+        def _execute(next_args: dict) -> Any:
+            from tools.a2a_tool import a2a_propose_response as _a2a_propose_response
+            return _finish_agent_tool(
+                _a2a_propose_response(
+                    proposed_response=next_args.get("proposed_response", ""),
+                    summary_for_human=next_args.get("summary_for_human", ""),
+                    clarify_callback=agent.clarify_callback,
+                ),
+                next_args,
+            )
     elif function_name == "read_terminal":
         def _execute(next_args: dict) -> Any:
             from tools.read_terminal_tool import read_terminal_tool as _read_terminal_tool

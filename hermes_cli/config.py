@@ -2095,6 +2095,18 @@ DEFAULT_CONFIG = {
         "max_parallel_jobs": None,
     },
 
+    "peers": {
+        # Local peer identity for agent-to-agent (A2A) MCP.
+        "local_id": "",
+        "serve": {
+            # When true, gateway (or `hermes peer serve`) exposes HTTP MCP at serve.port.
+            "enabled": False,
+            "host": "0.0.0.0",
+            "port": 8765,
+            "path": "/a2a/mcp",
+        },
+    },
+
     # Kanban multi-agent coordination — controls the dispatcher loop that
     # spawns workers for ready tasks. The dispatcher ticks every N seconds
     # (default 60), reclaims stale claims, promotes dependency-satisfied
