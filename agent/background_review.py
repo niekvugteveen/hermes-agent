@@ -175,7 +175,20 @@ _MEMORY_REVIEW_PROMPT = (
     "preferences, or personal details worth remembering?\n"
     "2. Has the user expressed expectations about how you should behave, their work "
     "style, or ways they want you to operate?\n\n"
-    "If something stands out, save it using the memory tool. "
+    "WHERE TO WRITE — this matters as much as what you save. If a "
+    "`hindsight_retain` tool is available, route by kind:\n"
+    "  - FACTS go to `hindsight_retain`: people, projects, events, "
+    "possessions, sizes, recipes, preferences about things, anything with a "
+    "date or a name. That store is unlimited and searchable.\n"
+    "  - Only STABLE CONVENTIONS go to the `memory` tool: paths, tool policy, "
+    "and standing instructions about how to operate. That store is injected "
+    "into EVERY future prompt and holds only a few hundred words in total, so "
+    "a fact parked there costs context on every single turn, forever.\n"
+    "  When in doubt, prefer `hindsight_retain` — it is the only store that "
+    "can grow without crowding something else out.\n"
+    "  If no `hindsight_retain` tool is present, use the `memory` tool as "
+    "before.\n\n"
+    "If something stands out, save it. "
     "If nothing is worth saving, just say 'Nothing to save.' and stop."
 )
 
@@ -405,6 +418,86 @@ _COMBINED_REVIEW_PROMPT = (
     "and stop — but don't reach for that conclusion as a default."
 )
 
+
+
+class _RetainOnlyMemoryProxy:
+    """Expose ONLY the external memory provider's retain tool to the review fork.
+
+    The fork is built with ``skip_memory=True`` so it never constructs its own
+    ``_memory_manager``; without that, ``run_conversation()`` would push the
+    harness prompt and the review's own output into the user's real memory
+    namespace through ``on_turn_start`` (cadence + turn message),
+    ``prefetch_all`` (recall query) and ``sync_all`` (the harness prompt and
+    review output recorded as a user/assistant turn pair). That isolation has
+    to hold.
+
+    But it also left the review with nowhere to file a *fact* except MEMORY.md,
+    which is injected into every future prompt and capped at a few hundred
+    words. The review's own instruction tells it to harvest "personal details",
+    so it reliably produced exactly the content that store is worst at holding.
+
+    This proxy re-binds the PARENT's manager for one purpose: an explicit
+    retain call. Every automatic ingestion and lifecycle hook is a no-op, so
+    the zero-side-effects property the comment above promises is preserved.
+    Anything not named here delegates to the parent manager, so a method added
+    upstream keeps working instead of raising AttributeError inside a daemon
+    thread whose exceptions are swallowed ("best-effort").
+    """
+
+    # Retain only. recall/reflect are deliberately excluded: the review is a
+    # write path, and a recall would add tokens and latency to a background
+    # task the user is not waiting on.
+    _ALLOWED_SUFFIXES = ("_retain",)
+
+    # The three leak sites named above, plus the rest of the surface that
+    # mutates provider or session state.
+    _NEUTERED = frozenset({
+        "on_turn_start", "prefetch_all", "queue_prefetch_all", "sync_all",
+        "on_session_end", "on_session_switch", "on_pre_compress",
+        "on_delegation", "initialize_all", "shutdown_all", "add_provider",
+        "notify_memory_tool_write",
+    })
+
+    def __init__(self, inner: Any):
+        object.__setattr__(self, "_inner", inner)
+
+    @staticmethod
+    def _schema_name(schema: Any) -> str:
+        if not isinstance(schema, dict):
+            return ""
+        fn = schema.get("function")
+        src = fn if isinstance(fn, dict) else schema
+        return src.get("name") or ""
+
+    def _allowed(self, name: str) -> bool:
+        return bool(name) and name.endswith(self._ALLOWED_SUFFIXES)
+
+    def has_tool(self, name: str) -> bool:
+        inner = object.__getattribute__(self, "_inner")
+        return self._allowed(name) and bool(inner.has_tool(name))
+
+    def handle_tool_call(self, name: str, args: dict, **kwargs) -> str:
+        if not self._allowed(name):
+            return f"Tool '{name}' is not available to the background review."
+        inner = object.__getattribute__(self, "_inner")
+        # Logged at INFO because the enclosing thread swallows exceptions: a
+        # silent absence of these lines is the tell that routing regressed.
+        logger.info("Background review: external-memory retain via %s", name)
+        return inner.handle_tool_call(name, args, **kwargs)
+
+    def get_all_tool_schemas(self) -> List[Dict[str, Any]]:
+        inner = object.__getattribute__(self, "_inner")
+        try:
+            schemas = inner.get_all_tool_schemas() or []
+        except Exception:
+            logger.warning("Background review: retain schema lookup failed", exc_info=True)
+            return []
+        return [s for s in schemas if self._allowed(self._schema_name(s))]
+
+    def __getattr__(self, name: str) -> Any:
+        if name in _RetainOnlyMemoryProxy._NEUTERED:
+            return lambda *a, **kw: None
+        return getattr(object.__getattribute__(self, "_inner"), name)
 
 
 def summarize_background_review_actions(
@@ -814,6 +907,22 @@ def _run_review_in_thread(
             review_agent._user_profile_enabled = agent._user_profile_enabled
             review_agent._memory_nudge_interval = 0
             review_agent._skill_nudge_interval = 0
+            # Built-in MEMORY.md/USER.md is re-bound above so the review can
+            # still write conventions. Give it the external provider's retain
+            # tool too, so a FACT has somewhere cheaper to go than the
+            # always-injected store. Not a plain re-bind — see
+            # _RetainOnlyMemoryProxy for the three ingestion paths that must
+            # stay dead.
+            _parent_mm = getattr(agent, "_memory_manager", None)
+            if _parent_mm is not None:
+                try:
+                    review_agent._memory_manager = _RetainOnlyMemoryProxy(_parent_mm)
+                except Exception:
+                    logger.warning(
+                        "Background review: retain proxy unavailable; "
+                        "review will fall back to built-in memory only",
+                        exc_info=True,
+                    )
             # PERSISTENCE ISOLATION (the curator-takeover root cause): the fork
             # shares the parent's session_id (set below, for prompt-cache
             # warmth), so without this it would write its harness turn ("Review
@@ -900,11 +1009,21 @@ def _run_review_in_thread(
                     quiet_mode=True,
                 )
             }
+            # The external retain tool comes from a memory plugin, not from a
+            # toolset, so get_tool_definitions() never yields it. Without this
+            # the model is offered the tool in tools[] and then denied at
+            # dispatch — which reads as the model misbehaving.
+            _rev_mm = getattr(review_agent, "_memory_manager", None)
+            if _rev_mm is not None:
+                for _schema in _rev_mm.get_all_tool_schemas():
+                    _name = _RetainOnlyMemoryProxy._schema_name(_schema)
+                    if _name:
+                        review_whitelist.add(_name)
             set_thread_tool_whitelist(
                 review_whitelist,
                 deny_msg_fmt=(
                     "Background review denied non-whitelisted tool: "
-                    "{tool_name}. Only memory/skill tools are allowed."
+                    "{tool_name}. Only memory/retain/skill tools are allowed."
                 ),
             )
             try:
@@ -925,9 +1044,9 @@ def _run_review_in_thread(
                 review_agent.run_conversation(
                     user_message=(
                         prompt
-                        + "\n\nYou can only call memory and skill "
-                        "management tools. Other tools will be denied "
-                        "at runtime — do not attempt them."
+                        + "\n\nYou can only call memory, long-term-memory "
+                        "retain, and skill management tools. Other tools "
+                        "will be denied at runtime — do not attempt them."
                     ),
                     conversation_history=_review_history,
                 )
