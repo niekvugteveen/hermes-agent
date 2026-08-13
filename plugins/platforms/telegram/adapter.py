@@ -843,10 +843,22 @@ class TelegramAdapter(BasePlatformAdapter):
         # Document size cap. Telegram's public Bot API caps getFile at 20MB; a
         # locally-hosted telegram-bot-api server (configured via extra.base_url)
         # raises that to 2GB, so the presence of base_url is the opt-in.
-        self._max_doc_bytes: int = (
+        #
+        # 2GB is a protocol ceiling, not a safe memory budget: the voice/audio/
+        # video handlers below call download_as_bytearray() and then copy the
+        # result again via bytes(), so peak RSS is roughly 2x the file size. A
+        # deployment whose container has no memory limit can therefore exhaust
+        # the host on a single large upload. Pin a lower ceiling with
+        # platforms.telegram.extra.max_doc_bytes (bytes).
+        _default_doc_bytes = (
             2 * 1024 * 1024 * 1024
             if self.config.extra.get("base_url")
             else 20 * 1024 * 1024
+        )
+        self._max_doc_bytes: int = int(
+            self._coerce_float_extra(
+                "max_doc_bytes", _default_doc_bytes, min_value=1024 * 1024
+            )
         )
         # Interactive model picker state per chat
         self._model_picker_state: Dict[str, dict] = {}
