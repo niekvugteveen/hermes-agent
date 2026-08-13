@@ -60,7 +60,6 @@ from . import protocol, security
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PORT = 9900
-_ORPHAN_TIMEOUT = 300  # seconds before a pending task is considered orphaned
 _WATCHDOG_INTERVAL = 60  # seconds between orphaned task watchdog runs
 _MAX_BODY = 1_048_576  # 1MB max request body — prevents DoS via memory exhaustion
 _SSE_KEEPALIVE = 5  # seconds between SSE keepalive comments
@@ -72,6 +71,26 @@ def _reply_timeout() -> float:
         return max(1.0, float(os.getenv("A2A_REPLY_TIMEOUT", "300")))
     except (ValueError, TypeError):
         return 300.0
+
+
+def _orphan_timeout() -> float:
+    """Seconds before a still-running task is written off as orphaned.
+
+    Must stay above ``_reply_timeout()``: the watchdog runs independently of
+    the waiting HTTP thread, so a lower value silently caps every reply at the
+    orphan bound instead — a turn that legitimately takes longer than this gets
+    failed out from under the caller with "[task orphaned]", no matter what
+    A2A_REPLY_TIMEOUT says. Defaults to one watchdog interval past the reply
+    timeout so raising A2A_REPLY_TIMEOUT alone is enough.
+    """
+    floor = _reply_timeout() + _WATCHDOG_INTERVAL
+    raw = os.getenv("A2A_ORPHAN_TIMEOUT", "").strip()
+    if not raw:
+        return floor
+    try:
+        return max(floor, float(raw))
+    except (ValueError, TypeError):
+        return floor
 
 
 def _default_agent_name() -> str:
@@ -471,8 +490,9 @@ class A2AAdapter(BasePlatformAdapter):
         """Background thread that fails orphaned tasks (keeps them queryable)."""
         while not self._watchdog_stop.wait(_WATCHDOG_INTERVAL):
             try:
-                for tid in self.tasks.fail_orphans(_ORPHAN_TIMEOUT):
-                    logger.warning("A2A: orphaned task %s marked failed (timeout %ds)", tid, _ORPHAN_TIMEOUT)
+                orphan_timeout = _orphan_timeout()
+                for tid in self.tasks.fail_orphans(orphan_timeout):
+                    logger.warning("A2A: orphaned task %s marked failed (timeout %ds)", tid, orphan_timeout)
                     protocol.metrics.tasks_failed += 1
             except Exception:
                 logger.debug("A2A: watchdog error", exc_info=True)

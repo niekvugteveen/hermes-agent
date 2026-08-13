@@ -499,6 +499,32 @@ class TestTaskStore:
         # Second sweep does nothing (already terminal).
         assert store.fail_orphans(timeout_seconds=300) == []
 
+    def test_orphan_timeout_never_undercuts_reply_timeout(self, monkeypatch):
+        """The watchdog must not fail tasks the reply path is still waiting on.
+
+        It runs on its own thread, so an orphan bound below A2A_REPLY_TIMEOUT
+        caps every reply at the orphan value instead — silently, and with a
+        misleading "[task orphaned]" message.
+        """
+        from plugins.platforms.a2a import adapter
+
+        monkeypatch.delenv("A2A_ORPHAN_TIMEOUT", raising=False)
+        monkeypatch.setenv("A2A_REPLY_TIMEOUT", "600")
+        # Raising the reply timeout alone is enough — the orphan bound follows.
+        assert adapter._orphan_timeout() > adapter._reply_timeout()
+
+        # An explicit value below the reply timeout is clamped up, not honoured.
+        monkeypatch.setenv("A2A_ORPHAN_TIMEOUT", "120")
+        assert adapter._orphan_timeout() > adapter._reply_timeout()
+
+        # A sane explicit value is honoured.
+        monkeypatch.setenv("A2A_ORPHAN_TIMEOUT", "900")
+        assert adapter._orphan_timeout() == 900
+
+        # Garbage falls back to the floor rather than crashing the watchdog.
+        monkeypatch.setenv("A2A_ORPHAN_TIMEOUT", "not-a-number")
+        assert adapter._orphan_timeout() > adapter._reply_timeout()
+
     def test_list_newest_first_with_filters(self):
         store = protocol.TaskStore()
         store.create("t1", "c1", "p")

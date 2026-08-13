@@ -95,6 +95,7 @@ Secure by default; every widening step is explicit:
 | `A2A_RATE_LIMIT` | `60` | Requests/minute per identity |
 | `A2A_MAX_PINGPONG_TURNS` | `5` | Anti-loop turn cap per context (max 20) |
 | `A2A_REPLY_TIMEOUT` | `300` | Seconds to wait for the agent's reply |
+| `A2A_ORPHAN_TIMEOUT` | `A2A_REPLY_TIMEOUT` + 60 | Seconds before a still-running task is written off as orphaned. Clamped to stay above the reply timeout |
 | `A2A_PUSH_SECRET` | bearer token | HMAC secret for push-notification signing |
 | `A2A_ADVERTISED_TOOLSETS` | all registered | Restrict which skills appear on the Agent Card |
 
@@ -119,4 +120,5 @@ curl -X POST http://your-host:9900/ \
 - **Peers can't reach the card URL** — the card was advertising your bind address; set `A2A_PUBLIC_URL` to the externally routable URL.
 - **`401 Unauthorized`** — token mismatch; check `A2A_PEER_TOKENS`/`A2A_BEARER_TOKEN` on the server and the peer's `auth:` block.
 - **Server won't bind non-localhost** — by design: set a bearer token first, then `A2A_HOST=0.0.0.0`.
-- **Replies time out on long tasks** — raise `A2A_REPLY_TIMEOUT`, or have the caller register a push-notification config and poll `GetTask`.
+- **Replies time out on long tasks** — raise `A2A_REPLY_TIMEOUT`, or have the caller register a push-notification config and poll `GetTask`. The orphan watchdog follows it automatically; you only need `A2A_ORPHAN_TIMEOUT` to give tasks *more* slack than the reply wait.
+- **Caller gets `[task orphaned — no reply produced]`** — the watchdog, not the reply wait. The message means the task outlived `A2A_ORPHAN_TIMEOUT`; `[agent did not reply in time]` is the reply-wait equivalent. Note the callee often finishes anyway and logs a `Sending response` into the already-failed task — check its log before assuming it never ran.
