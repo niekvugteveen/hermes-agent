@@ -1484,6 +1484,34 @@ class TestV1SpecRegressionFixes:
         assert posted["body"]["method"] == "SendMessage"
         assert posted["body"]["params"]["tenant"] == "dev-team"
 
+    def test_send_task_audits_the_peers_reply_as_inbound(self, monkeypatch, tmp_path):
+        """A peer's answer to *our* call must land in the audit log.
+
+        Only the server path audits "inbound", so without this the log records
+        every message we send and every unsolicited peer message, but never a
+        reply to our own call — and a reader asking "did the peer answer?" gets
+        a confident, wrong "no".
+        """
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        def fake_post(url, body, headers, timeout):
+            return {"jsonrpc": "2.0", "id": body["id"], "result": {"task": protocol.build_task(
+                "task-1", "ctx-1", protocol.STATE_COMPLETED, "the answer")}}
+
+        monkeypatch.setattr(tools, "_http_get_json", lambda *a, **k: {})
+        monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        tools._send_task("chantal", {"url": "http://peer.example", "auth": {}, "timeout": 5},
+                         "the question", "ctx-1")
+
+        recs = [json.loads(l) for l in
+                (tmp_path / "a2a_audit.jsonl").read_text().strip().splitlines()]
+        by_dir = {r["direction"]: r for r in recs}
+        assert by_dir["outbound"]["summary"] == "the question"
+        assert by_dir["inbound"]["summary"] == "the answer"
+        assert by_dir["inbound"]["peer"] == "chantal"
+        # Same task_id both ways, so a reader can pair request with reply.
+        assert by_dir["inbound"]["task_id"] == by_dir["outbound"]["task_id"]
+
     def test_cross_tenant_task_access_is_hidden(self):
         from plugins.platforms.a2a.adapter import A2AAdapter
         from gateway.config import PlatformConfig

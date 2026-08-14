@@ -195,6 +195,13 @@ def _send_task(agent_label: str, peer: dict, message: str, context_id: str) -> t
     if isinstance(payload, dict):
         reply_ctx = payload.get("contextId", ctx)
         state = (payload.get("status") or {}).get("state", "")
+    # Audit the reply too, not just the request we sent. The server path
+    # (adapter._handle_inbound) records peer-initiated messages as "inbound",
+    # so without this the audit log holds every message *we* sent and every
+    # peer message that arrived unsolicited — but never a peer's answer to our
+    # own call. Anything reading the log to answer "did the peer reply?" is
+    # then structurally blind, and reasonably concludes the call never landed.
+    security.audit("inbound", agent_label, rpc_body["id"], reply)
     protocol.persist_message(reply_ctx, "agent", reply, rpc_body["id"])
     protocol.metrics.inbound_total += 1
     return reply, reply_ctx, state
