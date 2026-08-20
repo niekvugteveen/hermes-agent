@@ -6981,12 +6981,34 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             logger.error(
-                "[%s] Failed to send Telegram voice/audio, falling back to base adapter: %s",
+                "[%s] Failed to send Telegram voice/audio, attempting document fallback: %s",
                 self.name,
                 _redact_telegram_error_text(e),
                 exc_info=True,
             )
-            return await super().send_voice(chat_id, audio_path, caption, reply_to, metadata=metadata)
+            # A voice send can be rejected for reasons unrelated to the file —
+            # most notably Voice_messages_forbidden, the recipient's Telegram
+            # Premium "who can send me voice messages" privacy setting. The
+            # audio itself is fine; only the round voice-bubble delivery is
+            # blocked. Deliver it as a document (works for any format, renders
+            # an inline audio player) instead of the base adapter's text-only
+            # "couldn't deliver" notice, which drops the audio entirely.
+            try:
+                return await self.send_document(
+                    chat_id=chat_id,
+                    file_path=audio_path,
+                    caption=caption,
+                    reply_to=reply_to,
+                    metadata=metadata,
+                )
+            except Exception as doc_error:
+                logger.error(
+                    "[%s] Document fallback also failed, falling back to base adapter: %s",
+                    self.name,
+                    _redact_telegram_error_text(doc_error),
+                    exc_info=True,
+                )
+                return await super().send_voice(chat_id, audio_path, caption, reply_to, metadata=metadata)
 
     async def send_multiple_images(
         self,
