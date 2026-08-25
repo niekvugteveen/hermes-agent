@@ -3884,6 +3884,13 @@ class TelegramAdapter(BasePlatformAdapter):
                 filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE | filters.Document.ALL | filters.Sticker.ALL,
                 self._handle_media_message
             ))
+            # Catch-all, registered last so every handler above wins the update
+            # first. Only reached when none of them matched — which PTB would
+            # otherwise treat as "drop it, say nothing". See the handler docstring.
+            self._app.add_handler(TelegramMessageHandler(
+                filters.ALL,
+                self._handle_unmatched_message
+            ))
             # Handle inline keyboard button callbacks (update prompts)
             self._app.add_handler(CallbackQueryHandler(self._handle_callback_query))
             
@@ -4015,6 +4022,12 @@ class TelegramAdapter(BasePlatformAdapter):
                         self._app.add_handler(TelegramMessageHandler(
                             filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE | filters.Document.ALL | filters.Sticker.ALL,
                             self._handle_media_message
+                        ))
+                        # Keep the catch-all last here too, or a reconnect
+                        # silently reintroduces the drop-without-a-trace.
+                        self._app.add_handler(TelegramMessageHandler(
+                            filters.ALL,
+                            self._handle_unmatched_message
                         ))
                         self._app.add_handler(CallbackQueryHandler(self._handle_callback_query))
                         # Best-effort discard the old app's resources
@@ -8796,6 +8809,55 @@ class TelegramAdapter(BasePlatformAdapter):
         consuming channel posts without ever building a gateway event.
         """
         return getattr(update, "effective_message", None) or getattr(update, "message", None)
+
+    async def _handle_unmatched_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log message updates that no other handler claimed.
+
+        Registered last in group 0, so PTB only reaches it once the text,
+        command, location and media handlers have all declined the update.
+
+        This exists because the decline is otherwise *silent*.  python-telegram-bot
+        models a fixed Bot API version, so a message carrying a field from a newer
+        one — a Bot API 10.1 rich message (tables, task lists, details, math), for
+        instance — arrives with ``text`` unset and its payload parked in
+        ``api_kwargs``.  ``filters.TEXT`` does not match, nothing else does either,
+        and PTB discards the update without logging anything at all: the user's
+        message simply goes unanswered with no trace in the gateway log.  Whatever
+        we cannot yet parse, we can at least refuse to drop quietly.
+        """
+        msg = self._effective_update_message(update)
+        if msg is None:
+            logger.warning(
+                "[%s] Unhandled update %s: no message payload", self.name, update.update_id
+            )
+            return
+        chat_id = getattr(getattr(msg, "chat", None), "id", None)
+
+        # PTB parks fields it has no model for in api_kwargs — that is where a
+        # newer Bot API message type shows up, and the only clue to its shape.
+        unmodelled = dict(getattr(msg, "api_kwargs", None) or {})
+        if unmodelled:
+            try:
+                payload = json.dumps(unmodelled, default=str, ensure_ascii=False)[:2000]
+            except Exception:  # pragma: no cover - diagnostics must never raise
+                payload = repr(unmodelled)[:2000]
+            logger.warning(
+                "[%s] Unhandled message update_id=%s chat=%s carries unmodelled Bot API "
+                "fields %s — no handler matched, so it went unanswered. Payload: %s",
+                self.name, update.update_id, chat_id, sorted(unmodelled), payload,
+            )
+            return
+
+        # No unknown fields: an ordinary service message (pins, joins, …) that
+        # this adapter has no reason to act on. Keep it quiet but visible.
+        populated = sorted(
+            slot for slot in getattr(msg, "__slots__", ()) or ()
+            if not slot.startswith("_") and getattr(msg, slot, None) is not None
+        )
+        logger.info(
+            "[%s] Ignoring unhandled message update_id=%s chat=%s fields=%s",
+            self.name, update.update_id, chat_id, populated,
+        )
 
     async def _handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming text messages.
