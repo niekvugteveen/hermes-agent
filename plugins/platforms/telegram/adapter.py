@@ -8810,6 +8810,91 @@ class TelegramAdapter(BasePlatformAdapter):
         """
         return getattr(update, "effective_message", None) or getattr(update, "message", None)
 
+    @staticmethod
+    def _render_rich_table(cells: Any) -> Optional[str]:
+        """Render a rich-message table block's ``cells`` as a markdown table.
+
+        ``cells`` is a list of rows, each a list of ``{"text": ..., "is_header": ...}``.
+        Markdown needs a delimiter row after the first line whether or not the
+        source marked it as a header, so we always emit one.
+        """
+        if not isinstance(cells, list) or not cells:
+            return None
+        rows: List[List[str]] = []
+        for row in cells:
+            if not isinstance(row, list):
+                continue
+            rows.append([
+                str(cell.get("text", "")).replace("|", r"\|").replace("\n", " ").strip()
+                for cell in row if isinstance(cell, dict)
+            ])
+        rows = [r for r in rows if r]
+        if not rows:
+            return None
+        width = max(len(r) for r in rows)
+        rows = [r + [""] * (width - len(r)) for r in rows]
+        lines = ["| " + " | ".join(rows[0]) + " |",
+                 "| " + " | ".join(["---"] * width) + " |"]
+        lines.extend("| " + " | ".join(r) + " |" for r in rows[1:])
+        return "\n".join(lines)
+
+    @classmethod
+    def _flatten_rich_message(cls, rich: Any) -> Optional[str]:
+        """Flatten a Bot API 10.1 rich message into markdown.
+
+        The model never sees the rich structure itself, so tables become
+        markdown tables and every other block degrades to its ``text``.  An
+        unrecognised block leaves a visible marker rather than vanishing —
+        silently dropping part of the user's message is the failure mode this
+        whole path exists to avoid.
+        """
+        if not isinstance(rich, dict):
+            return None
+        blocks = rich.get("blocks")
+        if not isinstance(blocks, list):
+            return None
+        parts: List[str] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "table":
+                rendered = cls._render_rich_table(block.get("cells"))
+                if rendered:
+                    parts.append(rendered)
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                if btype == "code":
+                    parts.append("```\n" + text + "\n```")
+                elif btype == "blockquote":
+                    parts.append("\n".join("> " + ln for ln in text.splitlines()))
+                else:
+                    parts.append(text)
+                continue
+            parts.append("[unsupported rich block: %s]" % (btype or "unknown"))
+        flattened = "\n\n".join(p for p in parts if p).strip()
+        return flattened or None
+
+    def _promote_rich_to_text(self, update: Update, msg: Message, text: str) -> Optional[Update]:
+        """Rebuild the update as a plain-text one carrying ``text``.
+
+        Going back through ``_handle_text_message`` rather than building an event
+        here keeps rich messages on exactly one code path — authorization,
+        batching, group-mention rules and observe buffering all still apply.
+        """
+        try:
+            data = msg.to_dict()
+            data.pop("rich_message", None)
+            data["text"] = text
+            return Update(update_id=update.update_id, message=Message.de_json(data, self._bot))
+        except Exception as e:
+            logger.warning(
+                "[%s] Could not rebuild rich message %s as text: %s",
+                self.name, update.update_id, _redact_telegram_error_text(e),
+            )
+            return None
+
     async def _handle_unmatched_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Log message updates that no other handler claimed.
 
@@ -8836,6 +8921,21 @@ class TelegramAdapter(BasePlatformAdapter):
         # PTB parks fields it has no model for in api_kwargs — that is where a
         # newer Bot API message type shows up, and the only clue to its shape.
         unmodelled = dict(getattr(msg, "api_kwargs", None) or {})
+
+        # Bot API 10.1 rich message (table / task list / details / math). We
+        # cannot render it natively, but we can flatten it to markdown and let
+        # the ordinary text path take it from there.
+        flattened = self._flatten_rich_message(unmodelled.get("rich_message"))
+        if flattened:
+            promoted = self._promote_rich_to_text(update, msg, flattened)
+            if promoted is not None:
+                logger.info(
+                    "[%s] Flattened rich message update_id=%s chat=%s to %d chars of markdown",
+                    self.name, update.update_id, chat_id, len(flattened),
+                )
+                await self._handle_text_message(promoted, context)
+                return
+
         if unmodelled:
             try:
                 payload = json.dumps(unmodelled, default=str, ensure_ascii=False)[:2000]
