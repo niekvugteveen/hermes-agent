@@ -368,7 +368,7 @@ def _resolve_script_path(script_path: str) -> Path:
     under ``<HERMES_HOME>/scripts/`` and only accepts absolute paths as-is.
     We MUST mirror that here so the guard scans the file that will actually
     run — otherwise a job whose script lives at the scheduler's real location
-    (``~/.hermes/scripts/restart.sh``) but is passed as the bare name
+    (``$HERMES_HOME/scripts/restart.sh``) but is passed as the bare name
     ``restart.sh`` would read as a nonexistent relative path and silently
     scan prompt-only content, letting the command through.
     """

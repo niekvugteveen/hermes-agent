@@ -529,19 +529,28 @@ def _validate_cron_script_path(script: Optional[str]) -> Optional[str]:
 
     raw = script.strip()
 
+    # The scripts directory is ``$HERMES_HOME/scripts`` — NOT ``~/.hermes/scripts``,
+    # which is where it lived before HERMES_HOME existed. This message used to name
+    # that stale path, and the rejection below is really about the argument being
+    # absolute, not about the file sitting in the wrong directory. The combination
+    # is actively misleading: on 2026-08-27 it talked an agent into moving working
+    # scripts out of the real directory into a long-dead ``~/.hermes/scripts`` tree,
+    # after which the cron job resolved to a file that was no longer there. Always
+    # interpolate the resolved path rather than hardcoding a directory in prose.
+    scripts_dir = get_hermes_home() / "scripts"
+
     # Reject absolute paths and ~ expansion at the API boundary.
-    # Only relative paths within ~/.hermes/scripts/ are allowed.
     if raw.startswith(("/", "~")) or (len(raw) >= 2 and raw[1] == ":"):
         return (
-            f"Script path must be relative to ~/.hermes/scripts/. "
-            f"Got absolute or home-relative path: {raw!r}. "
-            f"Place scripts in ~/.hermes/scripts/ and use just the filename."
+            f"Script path must be a bare filename, resolved against {scripts_dir}. "
+            f"Got an absolute or home-relative path: {raw!r}. "
+            f"If the file is already in that directory, pass only its filename. "
+            f"Do not move it elsewhere."
         )
 
     # Validate containment after resolution
     from tools.path_security import validate_within_dir
 
-    scripts_dir = get_hermes_home() / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     containment_error = validate_within_dir(scripts_dir / raw, scripts_dir)
     if containment_error:

@@ -270,7 +270,7 @@ TIPS = [
 
     # --- Hidden Gems & Power-User Tricks ---
     "Cron jobs can attach a Python script (--script) whose stdout is injected into the prompt as context.",
-    "Cron scripts live in ~/.hermes/scripts/ and run before the agent — perfect for data collection pipelines.",
+    "Cron scripts live in $HERMES_HOME/scripts (not ~/.hermes/scripts) and run before the agent — perfect for data collection pipelines.",
     "prefill_messages_file in config.yaml injects few-shot examples into every API call, never saved to history.",
     "SOUL.md completely replaces the agent's default identity — rewrite it to make Hermes your own.",
     "SOUL.md is auto-seeded with a default personality on first run. Edit it to customize.",
