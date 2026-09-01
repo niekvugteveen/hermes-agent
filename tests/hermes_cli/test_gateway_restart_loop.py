@@ -695,6 +695,23 @@ class TestLifecycleGuardModule:
         )
         assert result is False
 
+    def test_read_referenced_script_tolerates_nul_in_path(self):
+        """#76762 (follow-up): a referenced-script *path* carrying an embedded
+        NUL must not crash the guard. os.open() raises ValueError (not OSError)
+        before any byte is read, so the b"\\x00" in data check never runs and
+        the earlier fix (which only broadened .resolve()) left this gap.
+
+        Observed in production 2026-09-01: an agent invoking the venv python by
+        full path hung 99s and failed the terminal tool with
+        'open: embedded null character in path'.
+        """
+        from pathlib import Path
+        from cron.lifecycle_guard import _read_referenced_script
+
+        text, unsafe = _read_referenced_script(Path("/opt/hermes/.venv/bin/pyth\x00on3"))
+        assert text is None
+        assert unsafe is False
+
     def test_shell_script_reference_walk_still_works(self, tmp_path):
         """The referenced-script walk still applies to real shell scripts:
         a .sh script that itself invokes a lifecycle command is caught."""

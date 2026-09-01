@@ -258,7 +258,14 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
-    except OSError:
+    except (OSError, ValueError):
+        # OSError: unreadable/missing path. ValueError: an embedded NUL byte
+        # in the path string — os.open raises this *before* any read, so the
+        # `b"\x00" in data` check below never gets the chance. A path can carry
+        # a NUL when a binary's decoded contents get tokenized into a "script
+        # path" one level up in the recursion; a guarded path must never crash
+        # the guard (#76762). Same handling as the .resolve() call in
+        # _contains_unsafe_gateway_action.
         return None, False
     try:
         metadata = os.fstat(descriptor)
