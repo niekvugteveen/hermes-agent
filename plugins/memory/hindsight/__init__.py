@@ -342,6 +342,36 @@ def _run_sync(coro, timeout: float = _DEFAULT_TIMEOUT):
     return future.result(timeout=timeout)
 
 
+def _describe_store_error(exc: Exception, timeout: float | int | None) -> str:
+    """Human-readable detail for a failed ``hindsight_retain``.
+
+    The dominant failure is a client-side timeout: ``aretain_batch`` runs fact
+    extraction synchronously, so when the upstream extraction LLM (OpenRouter) is
+    slow or returns an empty body, ``future.result(timeout=...)`` raises
+    ``concurrent.futures.TimeoutError`` — whose ``str()`` is empty. For months that
+    surfaced as a useless ``Failed to store memory:`` with nothing after the colon,
+    which reads like a config error rather than a transient upstream stall. Name the
+    timeout (and any other empty-``str`` exception) explicitly so the next
+    occurrence is self-explanatory in the transcript.
+    """
+    import concurrent.futures
+
+    is_timeout = isinstance(exc, (concurrent.futures.TimeoutError, TimeoutError)) or (
+        "timeout" in type(exc).__name__.lower()
+    )
+    if is_timeout:
+        secs = f" after {int(timeout)}s" if timeout else ""
+        return (
+            f"timed out{secs} waiting for Hindsight to extract facts — the upstream "
+            f"LLM (OpenRouter) was too slow or returned nothing. The memory was NOT "
+            f"saved; retry, or raise HINDSIGHT_TIMEOUT if this recurs."
+        )
+    msg = str(exc).strip()
+    if not msg:
+        return f"{type(exc).__name__} (no error detail) — the memory was NOT saved."
+    return msg
+
+
 # ---------------------------------------------------------------------------
 # Backward-compatible alias — instances use self._run_sync() instead.
 # ---------------------------------------------------------------------------
@@ -2226,7 +2256,9 @@ class HindsightMemoryProvider(MemoryProvider):
                 return json.dumps({"result": "Memory stored successfully."})
             except Exception as e:
                 logger.warning("hindsight_retain failed: %s", e, exc_info=True)
-                return tool_error(f"Failed to store memory: {e}")
+                return tool_error(
+                    f"Failed to store memory: {_describe_store_error(e, self._timeout)}"
+                )
 
         elif tool_name == "hindsight_recall":
             query = args.get("query", "")
