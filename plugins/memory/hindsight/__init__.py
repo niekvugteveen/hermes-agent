@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import functools
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -530,7 +532,26 @@ def _normalize_retain_tags(value: Any) -> List[str]:
     return normalized
 
 
-_OBSERVATION_SCOPE_KEYWORDS = {"per_tag", "combined", "all_combinations"}
+_OBSERVATION_SCOPE_KEYWORDS = {"per_tag", "combined", "all_combinations", "shared"}
+
+
+@functools.lru_cache(maxsize=1)
+def _client_supports_prefer_observations() -> bool:
+    """Whether the installed hindsight-client accepts ``prefer_observations``.
+
+    plugin.yaml floors the dependency at the version that introduced it, but the
+    plugin also runs against whatever is already in an existing venv. Passing an
+    unknown keyword to ``arecall`` is a TypeError that would take *all* recall
+    down — a silently degraded ranking is a far better failure than no memory at
+    all — so this is checked rather than assumed. Cached: the signature cannot
+    change within a process.
+    """
+    try:
+        from hindsight_client import Hindsight
+
+        return "prefer_observations" in inspect.signature(Hindsight.arecall).parameters
+    except Exception:
+        return False
 
 
 def _normalize_observation_scopes(value: Any) -> Any:
@@ -538,8 +559,17 @@ def _normalize_observation_scopes(value: Any) -> Any:
 
     Returns one of:
       * ``None`` — nothing configured; Hindsight applies its ``combined`` default.
-      * a keyword string — ``"per_tag"`` / ``"combined"`` / ``"all_combinations"``.
+      * a keyword string — ``"per_tag"`` / ``"combined"`` / ``"all_combinations"``
+        / ``"shared"``.
       * ``list[list[str]]`` — custom scopes, one inner list per consolidation pass.
+
+    ``"shared"`` consolidates into one global untagged scope regardless of the
+    tags on the facts, which is what you want when every retain carries a
+    volatile per-call provenance tag (a ``session:<id>``): under ``combined``
+    each session becomes its own consolidation universe, so observations can
+    never merge or dedupe across sessions. The tags stay on the source facts
+    either way. Requires a Hindsight server that knows the keyword (>= 0.9.x);
+    older servers reject it rather than ignoring it.
 
     Accepts a keyword string, a JSON-encoded list, a flat list of tags (treated as
     a single scope), or a list of tag-lists. Anything unrecognized yields ``None``
@@ -1235,12 +1265,13 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "memory_mode", "description": "Memory integration mode", "default": "hybrid", "choices": ["hybrid", "context", "tools"]},
             {"key": "recall_prefetch_method", "description": "Auto-recall method", "default": "recall", "choices": ["recall", "reflect"]},
             {"key": "retain_tags", "description": "Default tags applied to retained memories (comma-separated)", "default": ""},
-            {"key": "observation_scopes", "description": "How observations are scoped during consolidation: 'combined' (default — one pass over all tags), 'per_tag' (one isolated observation per tag), 'all_combinations' (every tag subset — expensive), or a JSON list of tag-lists for explicit custom scopes. Empty uses Hindsight's 'combined' default.", "default": ""},
+            {"key": "observation_scopes", "description": "How observations are scoped during consolidation: 'combined' (default — one pass over all tags), 'shared' (one global untagged scope, so memories dedupe across volatile per-call tags such as session ids), 'per_tag' (one isolated observation per tag), 'all_combinations' (every tag subset — expensive), or a JSON list of tag-lists for explicit custom scopes. Empty uses Hindsight's 'combined' default.", "default": ""},
             {"key": "retain_source", "description": "Metadata source value attached to retained memories (identifies the client that stored them)", "default": _DEFAULT_RETAIN_SOURCE},
             {"key": "retain_user_prefix", "description": "Label used before user turns in retained transcripts", "default": "User"},
             {"key": "retain_assistant_prefix", "description": "Label used before assistant turns in retained transcripts", "default": "Assistant"},
             {"key": "recall_tags", "description": "Tags to filter when searching memories (comma-separated)", "default": ""},
             {"key": "recall_tags_match", "description": "Tag matching mode for recall", "default": "any", "choices": ["any", "all", "any_strict", "all_strict"]},
+            {"key": "recall_prefer_observations", "description": "Drop a raw fact from recall results when an observation consolidated from it is already there, so the same content does not consume the token budget twice. Only applies when recall_types requests 'observation' together with a raw type — inert under the observation-only default.", "default": True},
             {"key": "recall_types", "description": "Fact types to surface on recall — applies to both auto-recall and the hindsight_recall tool (comma-separated or list). Defaults to observation-only — observations are Hindsight's consolidated, deduplicated, evidence-grounded knowledge layer; raw world/experience facts are the supporting evidence observations already summarize. Set to e.g. 'observation,world,experience' to also include raw facts.", "default": "observation"},
             {"key": "auto_recall", "description": "Automatically recall memories before each turn", "default": True},
             {"key": "recall_sync", "description": "Recall synchronously against the current message before each turn (higher relevance, adds recall latency to the turn). Default off: recall runs in the background and is injected on the next turn.", "default": False},
@@ -1734,6 +1765,25 @@ class HindsightMemoryProvider(MemoryProvider):
         )
         self._recall_tags = self._config.get("recall_tags") or None
         self._recall_tags_match = self._config.get("recall_tags_match", "any")
+        # Default True, deviating from the server's own False. Recall otherwise
+        # returns both an observation and the raw fact it was consolidated from,
+        # and a consolidation that had a single source fact to work with tends to
+        # emit a near-verbatim copy of it — so the pair costs the caller's token
+        # budget twice for one piece of information. Measured on bank niek
+        # (2026-09-15, 5 queries, budget=low, max_tokens=2048) with types unset:
+        # 133 results / 16 near-duplicate pairs, against 131 / 0 once enabled, at
+        # equal or better latency. Freed slots are backfilled by the server, so
+        # the result count holds.
+        #
+        # NOTE it is inert under the default `recall_types` of ["observation"]:
+        # the server only applies it when 'observation' AND a raw type are both
+        # requested, and observation-only recall was measured at 0 duplicate
+        # pairs over the same queries. It matters the moment recall_types is
+        # widened to include world/experience, which is the only reason it is
+        # wired up now rather than later.
+        self._recall_prefer_observations = bool(
+            self._config.get("recall_prefer_observations", True)
+        )
         self._retain_source = str(
             self._config.get("retain_source") or os.environ.get("HINDSIGHT_RETAIN_SOURCE", _DEFAULT_RETAIN_SOURCE)
         ).strip()
@@ -1930,6 +1980,8 @@ class HindsightMemoryProvider(MemoryProvider):
                 recall_kwargs["tags_match"] = self._recall_tags_match
             if self._recall_types:
                 recall_kwargs["types"] = self._recall_types
+            if self._recall_prefer_observations and _client_supports_prefer_observations():
+                recall_kwargs["prefer_observations"] = True
             logger.debug("Recall: calling recall (bank=%s, query_len=%d, budget=%s)",
                          self._bank_id, len(query), self._budget)
             resp = self._run_hindsight_operation(lambda client: client.arecall(**recall_kwargs))
