@@ -1491,6 +1491,7 @@ def _run_review_in_thread(
     prompt: str,
     task_cfg: Optional[Dict[str, Any]] = None,
     review_run: Optional[_BackgroundReviewRun] = None,
+    include_memory_tool: bool = True,
 ) -> None:
     """Worker function executed in the background-review daemon thread.
 
@@ -1634,8 +1635,15 @@ def _run_review_in_thread(
             # Hardcoding ["memory", "skills"] granted the review LLM the MEMORY.md
             # read/write tool even when a profile set memory_enabled: false,
             # contaminating a memory-disabled profile (#54937 layer 2).
+            # Homelab: a skill-only review (memory nudge off or not due) must
+            # not get the memory tool either. Otherwise the skill review keeps
+            # harvesting personal facts into MEMORY.md after
+            # memory.nudge_interval was set to 0 -- 10 of 14 staged writes
+            # between 2026-08-25 and 2026-09-23 came from exactly this path.
             review_toolsets = ["skills"]
-            if review_agent._memory_enabled or review_agent._user_profile_enabled:
+            if include_memory_tool and (
+                review_agent._memory_enabled or review_agent._user_profile_enabled
+            ):
                 review_toolsets.insert(0, "memory")
             review_whitelist = {
                 t["function"]["name"]
@@ -1916,6 +1924,7 @@ def spawn_background_review_thread(
             prompt,
             task_cfg=task_cfg,
             review_run=review_run,
+            include_memory_tool=review_memory,
         )
 
     return _target, prompt
