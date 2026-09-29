@@ -2622,6 +2622,11 @@ class SendResult:
     # ``None`` (unset / not classified).  Producers should set this via
     # :func:`classify_send_error`.
     error_kind: Optional[str] = None
+    # True when a flood-control penalty was too long to wait out inline and a
+    # background redelivery was scheduled instead (see _send_with_retry).  The
+    # result itself is still a failure; the outcome of the deferred send is
+    # reported through ``on_deferred_result``.
+    deferred: bool = False
 
 
 # Machine-readable send-failure categories.  Kept platform-neutral so every
@@ -2919,6 +2924,20 @@ _RETRYABLE_ERROR_PATTERNS = (
     "remotedisconnected",
     "eoferror",
 )
+
+# Flood-control penalties (Telegram FloodWait / retry_after) up to this many
+# seconds are slept inline by _send_with_retry.  Longer ones are handed to a
+# background redelivery task so the session's processing task is not pinned
+# for minutes (#91969) -- and so the final response is not simply dropped,
+# which is what happened before: a ``flood_control:<n>`` result matched no
+# retryable pattern, skipped the retry loop and died in the plain-text
+# formatting fallback, inside the same flood penalty.
+_FLOOD_INLINE_WAIT_CAP_SECS = 60.0  # same inline cap upstream settled on
+# Longest penalty we still wait out in the background; beyond this the
+# delivery ledger (next boot) is the recovery path.
+_FLOOD_DEFERRED_MAX_WAIT_SECS = 3600.0
+# How many times a single payload may be re-deferred on repeated penalties.
+_FLOOD_MAX_DEFERRALS = 3
 
 
 # Type for message handlers.  Handlers may return a plain string (normal
@@ -5738,6 +5757,8 @@ class BasePlatformAdapter(ABC):
         metadata: Any = None,
         max_retries: int = 2,
         base_delay: float = 2.0,
+        on_deferred_result: Optional[Callable[["SendResult"], Awaitable[None]]] = None,
+        _deferral: int = 0,
     ) -> "SendResult":
         """
         Send a message with automatic retry for transient network errors.
@@ -5746,6 +5767,11 @@ class BasePlatformAdapter(ABC):
         to a plain-text version before giving up. If all attempts fail due to
         network errors, sends the user a brief delivery-failure notice so they
         know to retry rather than waiting indefinitely.
+
+        Flood control (``SendResult.retry_after``) is transient too: short
+        penalties are slept inline, long ones schedule a background
+        redelivery and return a failure with ``deferred=True``.  The final
+        outcome of that redelivery is passed to ``on_deferred_result``.
         """
 
         result = await self.send(
@@ -5759,7 +5785,8 @@ class BasePlatformAdapter(ABC):
             return result
 
         error_str = result.error or ""
-        is_network = result.retryable or self._is_retryable_error(error_str)
+        is_flood = result.retry_after is not None
+        is_network = is_flood or result.retryable or self._is_retryable_error(error_str)
 
         # Timeout errors are not safe to retry (message may have been
         # delivered) and not formatting errors — return the failure as-is.
@@ -5773,6 +5800,16 @@ class BasePlatformAdapter(ABC):
             server_retry_after = result.retry_after
             for attempt in range(1, max_retries + 1):
                 if server_retry_after is not None:
+                    if server_retry_after > _FLOOD_INLINE_WAIT_CAP_SECS:
+                        return self._defer_flood_redelivery(
+                            result,
+                            chat_id=chat_id,
+                            content=content,
+                            reply_to=reply_to,
+                            metadata=metadata,
+                            on_deferred_result=on_deferred_result,
+                            deferral=_deferral,
+                        )
                     delay = server_retry_after + random.uniform(0, 1)
                     server_retry_after = None  # only honor once per send
                 else:
@@ -5794,9 +5831,26 @@ class BasePlatformAdapter(ABC):
                 error_str = result.error or ""
                 if result.retry_after is not None:
                     server_retry_after = result.retry_after
-                if not (result.retryable or self._is_retryable_error(error_str)):
+                if not (
+                    result.retry_after is not None
+                    or result.retryable
+                    or self._is_retryable_error(error_str)
+                ):
                     break  # error switched to non-transient — fall through to plain-text fallback
             else:
+                if result.retry_after is not None:
+                    # Still flood-limited after the inline retries: hand the
+                    # rest to the background instead of sending a failure
+                    # notice that would land inside the same penalty.
+                    return self._defer_flood_redelivery(
+                        result,
+                        chat_id=chat_id,
+                        content=content,
+                        reply_to=reply_to,
+                        metadata=metadata,
+                        on_deferred_result=on_deferred_result,
+                        deferral=_deferral,
+                    )
                 # All retries exhausted (loop completed without break) — notify user
                 logger.error("[%s] Failed to deliver response after %d retries: %s", self.name, max_retries, error_str)
                 notice = (
@@ -5820,6 +5874,73 @@ class BasePlatformAdapter(ABC):
         if not fallback_result.success:
             logger.error("[%s] Fallback send also failed: %s", self.name, fallback_result.error)
         return fallback_result
+
+    def _defer_flood_redelivery(
+        self,
+        result: "SendResult",
+        *,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str],
+        metadata: Any,
+        on_deferred_result: Optional[Callable[["SendResult"], Awaitable[None]]],
+        deferral: int,
+    ) -> "SendResult":
+        """Schedule a background resend after a long flood penalty.
+
+        Returns ``result`` marked ``deferred=True`` when a task was scheduled,
+        or unchanged when the penalty/deferral budget is exhausted (the
+        delivery ledger then owns recovery on the next boot).
+        """
+        wait = float(result.retry_after or 0.0)
+        if deferral >= _FLOOD_MAX_DEFERRALS or wait > _FLOOD_DEFERRED_MAX_WAIT_SECS:
+            logger.error(
+                "[%s] Flood control: giving up on background redelivery "
+                "(retry_after=%.0fs, deferral %d/%d): %s",
+                self.name, wait, deferral, _FLOOD_MAX_DEFERRALS, result.error,
+            )
+            return result
+
+        async def _redeliver() -> None:
+            await asyncio.sleep(wait + random.uniform(1.0, 3.0))
+            try:
+                final = await self._send_with_retry(
+                    chat_id=chat_id,
+                    content=content,
+                    reply_to=reply_to,
+                    metadata=metadata,
+                    on_deferred_result=on_deferred_result,
+                    _deferral=deferral + 1,
+                )
+            except Exception as exc:
+                logger.error(
+                    "[%s] Deferred flood redelivery raised: %s", self.name, exc,
+                    exc_info=True,
+                )
+                final = SendResult(success=False, error=str(exc))
+            if final.deferred:
+                return  # re-deferred; that task reports the outcome
+            if final.success:
+                logger.info(
+                    "[%s] Deferred flood redelivery succeeded (%d chars) to %s",
+                    self.name, len(content), chat_id,
+                )
+            if on_deferred_result is not None:
+                try:
+                    await on_deferred_result(final)
+                except Exception:
+                    logger.debug("on_deferred_result callback failed", exc_info=True)
+
+        task = asyncio.create_task(_redeliver())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        logger.warning(
+            "[%s] Flood control (retry_after=%.0fs): scheduled background "
+            "redelivery of %d chars to %s (deferral %d/%d)",
+            self.name, wait, len(content), chat_id, deferral + 1, _FLOOD_MAX_DEFERRALS,
+        )
+        result.deferred = True
+        return result
 
     @staticmethod
     def _merge_caption(existing_text: Optional[str], new_text: str) -> str:
@@ -6812,11 +6933,40 @@ class BasePlatformAdapter(ABC):
                         except Exception:
                             logger.debug("delivery ledger record failed", exc_info=True)
                             _obligation_id = None
+                    async def _on_deferred_result(
+                        deferred_result: "SendResult",
+                        _oid: Optional[str] = _obligation_id,
+                    ) -> None:
+                        # A flood-deferred final send finished in the
+                        # background: settle its ledger row so a later boot
+                        # does not redeliver an already-delivered reply.
+                        if _oid is None:
+                            return
+                        try:
+                            from gateway.delivery_ledger import (
+                                mark_delivered,
+                                mark_failed,
+                            )
+
+                            if deferred_result.success:
+                                await asyncio.to_thread(mark_delivered, _oid)
+                            else:
+                                await asyncio.to_thread(
+                                    mark_failed,
+                                    _oid,
+                                    str(deferred_result.error or ""),
+                                )
+                        except Exception:
+                            logger.debug(
+                                "delivery ledger update failed", exc_info=True
+                            )
+
                     result = await delivery_adapter._send_with_retry(
                         chat_id=event.source.chat_id,
                         content=text_content,
                         reply_to=_reply_anchor,
                         metadata=_final_thread_metadata,
+                        on_deferred_result=_on_deferred_result,
                     )
                     _record_delivery(result)
                     if _obligation_id is not None:

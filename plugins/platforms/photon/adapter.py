@@ -2431,6 +2431,7 @@ class PhotonAdapter(BasePlatformAdapter):
         metadata: Any = None,
         max_retries: int = 1,
         base_delay: float = 2.0,
+        on_deferred_result: Any = None,  # base-class flood deferral; unused here
     ) -> SendResult:
         """Retry sends without the generic Markdown banner.
 

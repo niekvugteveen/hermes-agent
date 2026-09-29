@@ -206,3 +206,79 @@ class TestSendWithRetryAfter:
         second_sleep = mock_sleep.call_args_list[1][0][0]
         assert second_sleep >= 29.0  # 30 - 1 (max jitter)
 
+
+
+# ---------------------------------------------------------------------------
+# _send_with_retry — long flood penalties are deferred, never dropped
+# ---------------------------------------------------------------------------
+
+class TestFloodDeferral:
+    @pytest.mark.asyncio
+    async def test_flood_without_retryable_flag_is_retried(self):
+        """Telegram's fail-closed flood result carries only retry_after (no
+        retryable flag, no matching error pattern). It must still be retried,
+        not routed to the plain-text formatting fallback."""
+        adapter = _StubAdapter()
+        adapter._send_results = [
+            SendResult(success=False, error="flood_control:8.0", retry_after=8.0),
+            SendResult(success=True, message_id="ok"),
+        ]
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await adapter._send_with_retry("chat1", "hello")
+        assert result.success
+        assert mock_sleep.call_args_list[0][0][0] >= 8.0
+        assert all("formatting failed" not in c for _, c in adapter._send_calls)
+
+    @pytest.mark.asyncio
+    async def test_long_flood_schedules_background_redelivery(self):
+        import asyncio
+
+        adapter = _StubAdapter()
+        adapter._send_results = [
+            SendResult(success=False, error="flood_control:127.0", retry_after=127.0),
+            SendResult(success=True, message_id="late"),
+        ]
+        outcomes = []
+
+        async def _cb(res):
+            outcomes.append(res)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await adapter._send_with_retry(
+                "chat1", "full answer", on_deferred_result=_cb
+            )
+            assert not result.success
+            assert result.deferred
+            # Only the original attempt so far: no inline sleep, no fallback.
+            assert adapter._send_calls == [("chat1", "full answer")]
+            assert len(adapter._background_tasks) == 1
+            await asyncio.gather(*list(adapter._background_tasks))
+        # The background task waited out the penalty, then resent verbatim.
+        assert mock_sleep.call_args_list[0][0][0] >= 127.0
+        assert adapter._send_calls == [("chat1", "full answer")] * 2
+        assert len(outcomes) == 1 and outcomes[0].success
+        assert outcomes[0].message_id == "late"
+
+    @pytest.mark.asyncio
+    async def test_deferral_budget_is_bounded(self):
+        import asyncio
+
+        adapter = _StubAdapter()
+        adapter._send_results = [
+            SendResult(success=False, error="flood_control:120.0", retry_after=120.0)
+            for _ in range(10)
+        ]
+        outcomes = []
+
+        async def _cb(res):
+            outcomes.append(res)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await adapter._send_with_retry("chat1", "x", on_deferred_result=_cb)
+            for _ in range(10):
+                if not adapter._background_tasks:
+                    break
+                await asyncio.gather(*list(adapter._background_tasks))
+        # 1 original + 3 deferred attempts, then give up and report once.
+        assert len(adapter._send_calls) == 4
+        assert len(outcomes) == 1 and not outcomes[0].success
