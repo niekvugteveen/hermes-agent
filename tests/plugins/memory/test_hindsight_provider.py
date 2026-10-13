@@ -441,12 +441,15 @@ class TestPostSetup:
 # ---------------------------------------------------------------------------
 
 
+ACCEPTED = "Memory accepted; Hindsight is extracting facts in the background."
+
+
 class TestToolHandlers:
     def test_retain_success(self, provider):
         result = json.loads(provider.handle_tool_call(
             "hindsight_retain", {"content": "user likes dark mode"}
         ))
-        assert result["result"] == "Memory stored successfully."
+        assert result["result"] == ACCEPTED
         provider._client.aretain_batch.assert_called_once()
         call_kwargs = provider._client.aretain_batch.call_args.kwargs
         assert call_kwargs["bank_id"] == "test-bank"
@@ -455,6 +458,26 @@ class TestToolHandlers:
         # bank_id/retain_async are call-level args, never item keys.
         assert "bank_id" not in item
         assert "retain_async" not in item
+        # Tool retains follow retain_async (default True) like auto-retain,
+        # so a slow extraction cannot time out the turn and lose the memory.
+        assert call_kwargs["retain_async"] is True
+
+    def test_retain_tracks_async_operation_id(self, provider):
+        from types import SimpleNamespace
+
+        provider._client.aretain_batch.return_value = SimpleNamespace(
+            operation_id="op-123", operation_ids=None
+        )
+        provider.handle_tool_call("hindsight_retain", {"content": "fact"})
+        assert "op-123" in provider._pending_retain_ops
+        assert provider._retain_ops_bank_id == "test-bank"
+
+    def test_retain_sync_when_retain_async_disabled(self, provider_with_config):
+        p = provider_with_config(retain_async=False)
+        result = json.loads(p.handle_tool_call("hindsight_retain", {"content": "fact"}))
+        assert result["result"] == "Memory stored successfully."
+        assert p._client.aretain_batch.call_args.kwargs["retain_async"] is False
+        assert not p._pending_retain_ops
 
     def test_retain_defaults_item_timestamp_when_no_occurred_at(self, provider, monkeypatch):
         event_time = datetime(2026, 8, 24, 9, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
@@ -462,7 +485,7 @@ class TestToolHandlers:
         result = json.loads(provider.handle_tool_call(
             "hindsight_retain", {"content": "user likes dark mode"}
         ))
-        assert result["result"] == "Memory stored successfully."
+        assert result["result"] == ACCEPTED
         item = provider._client.aretain_batch.call_args.kwargs["items"][0]
         # Non-temporal retains still carry a defaulted event timestamp so the
         # server can resolve any relative time phrases (#93568).
@@ -473,7 +496,7 @@ class TestToolHandlers:
             "hindsight_retain",
             {"content": "user visited Paris", "occurred_at": "2026-03-03"},
         ))
-        assert result["result"] == "Memory stored successfully."
+        assert result["result"] == ACCEPTED
         item = provider._client.aretain_batch.call_args.kwargs["items"][0]
         assert item["timestamp"] == "2026-03-03"
 

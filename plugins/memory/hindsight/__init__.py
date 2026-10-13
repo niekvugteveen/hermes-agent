@@ -2299,11 +2299,28 @@ class HindsightMemoryProvider(MemoryProvider):
                 # aretain_batch takes bank_id/retain_async as call args, not item keys.
                 item.pop("bank_id", None)
                 item.pop("retain_async", None)
-                logger.debug("Tool hindsight_retain: bank=%s, content_len=%d, context=%s",
-                             self._bank_id, len(content), context)
-                self._run_hindsight_operation(
-                    lambda client: client.aretain_batch(bank_id=self._bank_id, items=[item])
+                # Follow retain_async like auto-retain does. A synchronous call
+                # blocks the turn for the whole server-side extraction, and the
+                # client timeout (HINDSIGHT_TIMEOUT) fires before the server's
+                # own per-attempt LLM retry can help -- the memory is then lost
+                # with no trace server-side. Async returns once the write is
+                # accepted; a later failure stays in async_operations, where it
+                # can be seen and resubmitted.
+                bank_id = self._bank_id
+                retain_async_flag = self._retain_async
+                logger.debug("Tool hindsight_retain: bank=%s, async=%s, content_len=%d, context=%s",
+                             bank_id, retain_async_flag, len(content), context)
+                resp = self._run_hindsight_operation(
+                    lambda client: client.aretain_batch(
+                        bank_id=bank_id, items=[item], retain_async=retain_async_flag
+                    )
                 )
+                if retain_async_flag:
+                    # Same read-after-write gate as auto-retain: the next
+                    # prefetch waits for this op before recalling.
+                    self._track_retain_ops(resp, bank_id)
+                    logger.debug("Tool hindsight_retain: accepted")
+                    return json.dumps({"result": "Memory accepted; Hindsight is extracting facts in the background."})
                 logger.debug("Tool hindsight_retain: success")
                 return json.dumps({"result": "Memory stored successfully."})
             except Exception as e:
