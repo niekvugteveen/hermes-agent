@@ -5244,9 +5244,21 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
             logger.error(
-                "[%s] Failed to send Telegram voice/audio, falling back to base adapter: %s", self.name,
+                "[%s] Failed to send Telegram voice/audio, attempting document fallback: %s", self.name,
                 _redact_telegram_error_text(e), exc_info=True)
-            return await super().send_voice(chat_id, audio_path, caption, reply_to, metadata=metadata)
+            # A voice send can be rejected for reasons unrelated to the file, most notably
+            # Voice_messages_forbidden (the recipient's "who can send me voice messages" privacy
+            # setting). Deliver the audio as a document (inline player) instead of the base
+            # adapter's text-only notice, which drops the audio entirely. Runs before the finally
+            # below, so a transcoded file is still on disk for the upload.
+            try:
+                return await self.send_document(
+                    chat_id=chat_id, file_path=audio_path, caption=caption, reply_to=reply_to, metadata=metadata)
+            except Exception as doc_error:
+                logger.error(
+                    "[%s] Document fallback also failed, falling back to base adapter: %s", self.name,
+                    _redact_telegram_error_text(doc_error), exc_info=True)
+                return await super().send_voice(chat_id, audio_path, caption, reply_to, metadata=metadata)
         finally:
             if _transcoded_voice_path:
                 with contextlib.suppress(OSError):
