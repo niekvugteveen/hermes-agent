@@ -386,6 +386,15 @@ _MEMORY_ROUTING_BLOCK = (
     "unless the user marked it general ('always', 'from now on', 'remember') or stated a standing "
     "like/dislike ('I hate X', 'stop doing Y'). If unsure, leave it "
     "out — a wrong fact misleads every future session.\n\n"
+    # Homelab: with an external long-term store bound (see _RetainOnlyMemoryProxy), facts belong
+    # there and not in the always-injected files, which hold only a few hundred words in total.
+    "If a `*_retain` tool (e.g. `hindsight_retain`) is available, route by kind: FACTS — people, "
+    "projects, events, possessions, sizes, recipes, preferences about things, anything with a date "
+    "or a name — go to that retain tool, which is unlimited and searchable. Only stable conventions "
+    "(paths, tool policy, standing instructions about how to operate, who the user is at the core) "
+    "go to the memory tool: those files are injected into EVERY future prompt, so a fact parked "
+    "there costs context on every turn, forever. When in doubt, prefer the retain tool. Without a "
+    "retain tool, use the memory tool as described above.\n\n"
 )
 
 _MEMORY_REVIEW_PROMPT = (
@@ -1111,6 +1120,105 @@ def _track_review_fork(agent: Any, review_agent: Any, *, register: bool) -> None
                     agent._active_children.remove(review_agent)
 
 
+class _RetainOnlyMemoryProxy:
+    """Expose ONLY the parent's external memory provider ``*_retain`` tool to the review fork.
+
+    The fork is built with ``skip_memory=True`` so it never constructs its own memory manager:
+    one scoped to the parent's session_id would push the harness prompt and the review's own
+    output into the user's real memory namespace (``on_turn_start``, ``prefetch_all``,
+    ``sync_all``). That isolation has to hold. But it also left the review with nowhere to file
+    a FACT except MEMORY.md/USER.md, which are injected into every future prompt and capped at a
+    few hundred words — and the memory review explicitly asks for personal details.
+
+    This proxy re-binds the PARENT's manager for one purpose: an explicit retain call. It is
+    deny-by-default: every other method is a no-op returning None, so a hook added upstream (or
+    a teardown such as ``release_soft`` / ``shutdown_all`` reached through the fork's
+    ``release_clients()``) can never touch the parent's live provider. Recall/reflect are
+    excluded on purpose — the review is a write path."""
+
+    _ALLOWED_SUFFIXES = ("_retain",)
+    # No providers of its own: label/probe helpers must see a detached fork.
+    providers: tuple = ()
+
+    def __init__(self, inner: Any):
+        object.__setattr__(self, "_inner", inner)
+
+    @classmethod
+    def _allowed(cls, name: Any) -> bool:
+        return isinstance(name, str) and bool(name) and name.endswith(cls._ALLOWED_SUFFIXES)
+
+    def has_tool(self, name: str) -> bool:
+        return self._allowed(name) and bool(object.__getattribute__(self, "_inner").has_tool(name))
+
+    def handle_tool_call(self, name: str, args: dict, **kwargs) -> str:
+        if not self._allowed(name):
+            return json.dumps({"error": f"Tool '{name}' is not available to the background review."})
+        # INFO because the review thread swallows exceptions: a silent absence of this line is
+        # the tell that routing regressed.
+        logger.info("Background review: external-memory retain via %s", name)
+        return object.__getattribute__(self, "_inner").handle_tool_call(name, args, **kwargs)
+
+    def get_all_tool_schemas(self) -> list[dict[str, Any]]:
+        from agent.memory_manager_tools import normalize_tool_schema
+
+        schemas = object.__getattribute__(self, "_inner").get_all_tool_schemas() or []
+        out = []
+        for raw in schemas:
+            schema = normalize_tool_schema(raw)
+            if schema is not None and self._allowed(schema["name"]):
+                out.append(schema)
+        return out
+
+    def get_all_tool_names(self) -> set:
+        return {s["name"] for s in self.get_all_tool_schemas()}
+
+    def supports_pre_compress_checkpoint(self, *_args: Any, **_kwargs: Any) -> bool:
+        # The fork's compaction is in-place only and nothing durable is lost; upstream treats a
+        # detached fork with no manager as "no checkpoint needed", and this keeps that outcome
+        # (on_pre_compress below is a no-op) instead of failing the review closed.
+        return True
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return lambda *_a, **_kw: None
+
+
+def _bind_review_retain(agent: Any, review_agent: Any, *, routed: bool) -> set:
+    """Bind the parent's retain tool(s) to the fork; return the names to whitelist (empty when
+    the parent has no external provider). Same-model forks only whitelist names already present
+    in the inherited ``tools[]`` (advertising must stay byte-identical for cache parity); a
+    routed fork is cache-cold anyway, so its tool surface gets the schema appended."""
+    parent_mm = getattr(agent, "_memory_manager", None)
+    if parent_mm is None:
+        return set()
+    try:
+        proxy = _RetainOnlyMemoryProxy(parent_mm)
+        schemas = proxy.get_all_tool_schemas()
+    except Exception:
+        logger.warning("Background review: retain proxy unavailable; built-in memory only", exc_info=True)
+        return set()
+    if not schemas:
+        return set()
+    tools = getattr(review_agent, "tools", None)
+    if not isinstance(tools, list):
+        return set()
+    advertised = {t.get("function", {}).get("name") for t in tools if isinstance(t, dict)}
+    names: set = set()
+    for schema in schemas:
+        if schema["name"] not in advertised:
+            if not routed:
+                continue
+            tools.append({"type": "function", "function": schema})
+            if getattr(review_agent, "valid_tool_names", None) is None:
+                review_agent.valid_tool_names = set()
+            review_agent.valid_tool_names.add(schema["name"])
+        names.add(schema["name"])
+    if names:
+        review_agent._memory_manager = proxy
+    return names
+
+
 def _review_tool_whitelist(
     review_agent: Any, task_cfg: Optional[dict[str, Any]], review_memory: bool = False,
 ) -> tuple[set, set]:
@@ -1197,9 +1305,14 @@ def _run_review_fork(
     st.review_agent, _rt, _routed = build_cache_parity_fork(
         agent, task_cfg, max_iterations=_REVIEW_MAX_ITERATIONS)
     st.review_agent._review_attended = explicit
+    # Homelab: a memory review may file facts in the external long-term store via its retain
+    # tool. Gated on the same trigger as the built-in memory tool (#105921): a skill-only review
+    # gets no memory write surface at all.
+    retain_names = _bind_review_retain(agent, st.review_agent, routed=_routed) if review_memory else set()
     _track_review_fork(agent, st.review_agent, register=True)
     from hermes_cli.plugins import set_thread_tool_whitelist, clear_thread_tool_whitelist
     review_whitelist, configured_extra_tools = _review_tool_whitelist(st.review_agent, task_cfg, review_memory)
+    review_whitelist |= retain_names
     extra_list = ", ".join(sorted(configured_extra_tools))
     deny_extra = f" Configured extra tools also allowed: {extra_list}." if configured_extra_tools else ""
     prompt_extra = f" Exception — these configured tools are also allowed: {extra_list}." if configured_extra_tools else ""
@@ -1207,6 +1320,12 @@ def _run_review_fork(
     # tell the model that memory is available, or it will burn iterations on denied calls.
     memory_phrase_deny = " and memory for notes (add only)" if "memory" in review_whitelist else ""
     memory_phrase_prompt = "memory and skill " if "memory" in review_whitelist else "skill "
+    if retain_names:
+        retain_list = ", ".join(sorted(retain_names))
+        memory_phrase_deny += f", {retain_list} for facts"
+        memory_phrase_prompt = (
+            "memory, long-term-memory retain and skill " if "memory" in review_whitelist
+            else "long-term-memory retain and skill ")
     set_thread_tool_whitelist(
         review_whitelist,
         deny_msg_fmt=(
