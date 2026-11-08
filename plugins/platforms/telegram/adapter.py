@@ -6510,6 +6510,16 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         chat_id = getattr(getattr(msg, "chat", None), "id", None)
         # PTB parks fields it has no model for in api_kwargs: the only clue to a newer message type.
         unmodelled = dict(getattr(msg, "api_kwargs", None) or {})
+        # Bot API 10.1 rich message: flatten it to markdown and let the ordinary text path take it.
+        flattened = self._flatten_rich_message(unmodelled.get("rich_message"))
+        if flattened:
+            promoted = self._promote_rich_to_text(update, msg, flattened)
+            if promoted is not None:
+                logger.info(
+                    "[%s] Flattened rich message update_id=%s chat=%s to %d chars of markdown",
+                    self.name, update.update_id, chat_id, len(flattened))
+                await self._handle_text_message(promoted, context)
+                return
         if unmodelled:
             try:
                 payload = json.dumps(unmodelled, default=str, ensure_ascii=False)[:2000]
@@ -7077,6 +7087,79 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
             if text:
                 lines.extend(text.splitlines())
         return "\n".join(line.rstrip() for line in lines if line)
+
+    @classmethod
+    def _render_rich_table(cls, cells: Any) -> Optional[str]:
+        """A rich ``table`` block's ``cells`` (rows of ``{"text", "is_header", ...}``) as a markdown
+        table. Markdown needs a delimiter row after the first line whether or not the source marked
+        it as a header, so one is always emitted; ragged rows are padded."""
+        if not isinstance(cells, list):
+            return None
+        rows = [
+            [cls._flatten_rich_inline_text(cell.get("text")).replace("|", r"\|").replace("\n", " ").strip()
+             for cell in row if isinstance(cell, dict)]
+            for row in cells if isinstance(row, list)]
+        rows = [r for r in rows if r]
+        if not rows:
+            return None
+        width = max(len(r) for r in rows)
+        rows = [r + [""] * (width - len(r)) for r in rows]
+        lines = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join(["---"] * width) + " |"]
+        lines.extend("| " + " | ".join(r) + " |" for r in rows[1:])
+        return "\n".join(lines)
+
+    @classmethod
+    def _flatten_inbound_rich_blocks(cls, blocks: Any) -> list[str]:
+        """Markdown parts for inbound rich blocks. Unlike :meth:`_flatten_rich_blocks` (plaintext for
+        quoted replies) a table survives as a markdown table, and a block with no recoverable text
+        leaves a visible marker: silently dropping part of the user's message is the failure this
+        path exists to prevent."""
+        parts: list[str] = []
+        for block in blocks if isinstance(blocks, list) else ():
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "table":
+                rendered = cls._render_rich_table(block.get("cells"))
+                if rendered:
+                    parts.append(rendered)
+                continue
+            text = (cls._flatten_rich_blocks([block]) if btype == "list"
+                    else cls._flatten_rich_inline_text(block.get("text")))
+            if text.strip():
+                if btype == "code":
+                    parts.append("```\n" + text + "\n```")
+                elif btype == "blockquote":
+                    parts.append("\n".join("> " + ln for ln in text.splitlines()))
+                else:
+                    parts.append(text)
+            elif isinstance(block.get("blocks"), list):  # container blocks (details, ...)
+                parts.extend(cls._flatten_inbound_rich_blocks(block["blocks"]))
+            else:
+                parts.append("[unsupported rich block: %s]" % (btype or "unknown"))
+        return parts
+
+    @classmethod
+    def _flatten_rich_message(cls, rich: Any) -> Optional[str]:
+        """Flatten an inbound Bot API 10.1 rich message (``api_kwargs["rich_message"]``) to markdown."""
+        if not isinstance(rich, dict) or not isinstance(rich.get("blocks"), list):
+            return None
+        return "\n\n".join(p for p in cls._flatten_inbound_rich_blocks(rich["blocks"]) if p).strip() or None
+
+    def _promote_rich_to_text(self, update: Update, msg: Message, text: str) -> Optional[Update]:
+        """Rebuild the update as a plain-text one carrying ``text``. Going back through
+        ``_handle_text_message`` instead of building an event here keeps rich messages on one code
+        path: authorization, batching, group-mention rules and observe buffering all still apply."""
+        try:
+            data = msg.to_dict()
+            data.pop("rich_message", None)
+            data["text"] = text
+            return Update(update_id=update.update_id, message=Message.de_json(data, self._bot))
+        except Exception as e:
+            logger.warning(
+                "[%s] Could not rebuild rich message %s as text: %s",
+                self.name, update.update_id, _redact_telegram_error_text(e))
+            return None
 
     @classmethod
     def _extract_rich_reply_text(cls, reply_to_message: Any) -> Optional[str]:
