@@ -306,13 +306,15 @@ RUN touch ./README.md
 # install then runs with an empty cache and builds python-olm from source.
 # homelab: [firecrawl] (web extract against our self-hosted Firecrawl) and
 # [hindsight] (client for the vendored plugins/memory/hindsight provider) are
-# baked so neither needs a first-boot install into /opt/data/installs.
+# baked so neither needs a first-boot install into /opt/data/installs. [edge-tts] and
+# [tts-premium] carry the agents' text_to_speech: the 0.21 image found them in a
+# lazy-install dir on the volume, and lazy installs are off here (security config).
 RUN python3 -m pm.build_env --source /opt/hermes --python /usr/local/bin/python3 \
     --cache /opt/hermes/uv-cache \
     --out /opt/hermes/.venv --no-install-project --sealed --record-selection \
     --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock \
     --extra azure-identity --extra matrix --extra google-chat --extra fal --extra documents \
-    --extra firecrawl --extra hindsight
+    --extra firecrawl --extra hindsight --extra edge-tts --extra tts-premium
 
 # Icons render on the runtime environment: Pillow and resvg-py are core
 # dependencies. A stage of its own so the frontend stage keeps building its
