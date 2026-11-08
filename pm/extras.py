@@ -21,6 +21,7 @@ ANCHORS: dict[str, str | tuple[str, ...]] = {
     "azure-identity": "azure.identity",
     "exa": "exa_py",
     "firecrawl": "firecrawl",
+    "hindsight": "hindsight_client",
     "parallel-web": "parallel",
     "ddgs": "ddgs",
     "otlp": "opentelemetry.sdk",
