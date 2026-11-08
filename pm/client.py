@@ -15,6 +15,8 @@ from pm.plugin_inputs import Candidates, Members, PluginInput, Selection
 from pm.runtime import is_runtime, runtime_command, runtime_environment
 from pm.worker_operations import OPERATIONS
 
+_WORKER_EXIT_TIMEOUT = 120
+
 
 def _missing_or_refuse(name):
     from pm.install import _refuse_lazy, current_target, is_installed, lazy_installs_allowed
@@ -170,7 +172,9 @@ def _request(operation, arguments, *, callbacks=None, pause_event=None, project_
             if monitor is not None:
                 monitor.join()
             writer.close()
-            if process.wait(timeout=5):
+            # homelab: the worker exits after its result (receipt context, interpreter teardown).
+            # On a contended spinning-disk host that took over 5 s and failed a finished build.
+            if process.wait(timeout=_WORKER_EXIT_TIMEOUT):
                 raise InstallError("pm", "worker exited unsuccessfully")
             receipt.accept_worker_receipt(response.get("receipt"), update_id)
             if callback_error is not None:
