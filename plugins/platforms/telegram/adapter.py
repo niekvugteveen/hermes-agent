@@ -4933,7 +4933,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         except Exception as exc:
             logger.error("Failed to write update response from callback: %s", exc)
 
-    # `gt:<verb>` -> (script in ~/.hermes/scripts/gmail-triage/, extra-args, success-label, is_state). The callback
+    # `gt:<verb>` -> (script in $HERMES_HOME/scripts/gmail-triage/, extra-args, success-label, is_state). The callback
     # `arg` is always the first positional arg. is_state=True keeps the keyboard tappable (sticky sender rule);
     # False strips it on success (per-email one-shot).
     # The success label is a ``platform.telegram.gmail_triage.*`` catalog key, resolved per tap.

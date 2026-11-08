@@ -1251,7 +1251,7 @@ def check_gateway_lifecycle(prompt: Optional[str], script: Optional[str] = None)
                 "evicted FileProvider placeholder can hang the guard's "
                 "preflight scan indefinitely, so it is refused without "
                 "being read. Move the script to a local, non-cloud path "
-                "(e.g. ~/.hermes/scripts/) and recreate the job."
+                "(e.g. $HERMES_HOME/scripts) and recreate the job."
             )
         python_script = resolved_script is not None and resolved_script.suffix == ".py"
         script_text, refusal = _read_script_for_scanning(script)

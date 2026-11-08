@@ -3787,7 +3787,7 @@ tips:
   t214: "在配置中设置 tool_preview_length: 0，加载动画的活动信息流会显示完整文件路径。"
   t215: "hermes status --deep 会对所有组件运行更深入的诊断检查。"
   t216: "定时任务可以附带一个 Python 脚本（--script），其 stdout 会作为上下文注入提示词。"
-  t217: "定时任务脚本存放在 ~/.hermes/scripts/，在代理运行之前执行——非常适合数据采集流水线。"
+  t217: "定时任务脚本存放在 $HERMES_HOME/scripts/，在代理运行之前执行——非常适合数据采集流水线。"
   t218: "config.yaml 中的 prefill_messages_file 会把 few-shot 示例注入每次 API 调用，且永不保存到历史记录。"
   t219: "SOUL.md 会完全替换代理的默认身份——改写它，让 Hermes 真正属于你。"
   t220: "首次运行时 SOUL.md 会自动填入默认人格。编辑它即可自定义。"

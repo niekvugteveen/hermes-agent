@@ -3804,7 +3804,7 @@ tips:
   t214: "A tool_preview_length: 0 a konfigurációban teljes fájlútvonalakat mutat a forgó ikon tevékenységlistájában."
   t215: "A hermes status --deep mélyebb diagnosztikai ellenőrzéseket futtat az összes komponensen."
   t216: "A cron feladatokhoz Python szkript is csatolható (--script), amelynek kimenete kontextusként kerül a promptba."
-  t217: "A cron szkriptek a ~/.hermes/scripts/ mappában élnek, és az ügynök előtt futnak – ideális adatgyűjtő folyamatokhoz."
+  t217: "A cron szkriptek a $HERMES_HOME/scripts/ mappában élnek, és az ügynök előtt futnak – ideális adatgyűjtő folyamatokhoz."
   t218: "A config.yaml prefill_messages_file beállítása few-shot példákat injektál minden API-hívásba, az előzményekbe mentés nélkül."
   t219: "A SOUL.md teljesen felülírja az ügynök alapértelmezett identitását – írd át, hogy a Hermes igazán a tiéd legyen."
   t220: "A SOUL.md első futáskor automatikusan alapértelmezett személyiséggel töltődik fel. Szerkeszd a testreszabáshoz."

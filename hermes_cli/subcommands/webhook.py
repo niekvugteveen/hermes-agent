@@ -44,7 +44,7 @@ def build_webhook_parser(subparsers, *, cmd_webhook: Callable) -> None:
         "in that chat has context. Only for sources whose content you trust in your conversation.")
     wh_sub.add_argument(
         "--script", default="",
-        help="Filter/transform script under ~/.hermes/scripts/. The route "
+        help="Filter/transform script under $HERMES_HOME/scripts. The route "
         "payload is passed as JSON on stdin; empty stdout, [SILENT], or a "
         "nonzero exit code ignores the webhook.")
     wh_sub.add_argument(

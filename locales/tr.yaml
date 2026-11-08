@@ -3787,7 +3787,7 @@ tips:
   t214: "Yapılandırmada tool_preview_length: 0, dönen simgenin etkinlik akışında tam dosya yollarını gösterir."
   t215: "hermes status --deep, tüm bileşenlerde daha derin tanılama denetimleri çalıştırır."
   t216: "Cron işlerine, stdout çıktısı isteme bağlam olarak enjekte edilen bir Python betiği (--script) eklenebilir."
-  t217: "Cron betikleri ~/.hermes/scripts/ altında bulunur ve ajandan önce çalışır — veri toplama hatları için idealdir."
+  t217: "Cron betikleri $HERMES_HOME/scripts/ altında bulunur ve ajandan önce çalışır — veri toplama hatları için idealdir."
   t218: "config.yaml içindeki prefill_messages_file, her API çağrısına few-shot örnekler enjekte eder; geçmişe hiç kaydedilmez."
   t219: "SOUL.md ajanın varsayılan kimliğini tamamen değiştirir — Hermes'i kendinize ait kılmak için yeniden yazın."
   t220: "SOUL.md ilk çalıştırmada varsayılan bir kişilikle otomatik doldurulur. Özelleştirmek için düzenleyin."

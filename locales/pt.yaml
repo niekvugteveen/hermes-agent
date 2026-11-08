@@ -3787,7 +3787,7 @@ tips:
   t214: "tool_preview_length: 0 na configuração mostra caminhos de arquivo completos no feed de atividade do spinner."
   t215: "hermes status --deep executa verificações de diagnóstico mais profundas em todos os componentes."
   t216: "Tarefas cron podem anexar um script Python (--script) cujo stdout é injetado no prompt como contexto."
-  t217: "Scripts cron ficam em ~/.hermes/scripts/ e rodam antes do agente — perfeitos para pipelines de coleta de dados."
+  t217: "Scripts cron ficam em $HERMES_HOME/scripts/ e rodam antes do agente — perfeitos para pipelines de coleta de dados."
   t218: "prefill_messages_file no config.yaml injeta exemplos few-shot em toda chamada de API, sem nunca salvá-los no histórico."
   t219: "SOUL.md substitui completamente a identidade padrão do agente — reescreva-o para tornar o Hermes seu."
   t220: "SOUL.md é preenchido automaticamente com uma personalidade padrão na primeira execução. Edite-o para personalizar."

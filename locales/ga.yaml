@@ -3787,7 +3787,7 @@ tips:
   t214: "Taispeánann tool_preview_length: 0 sa chumraíocht conairí comhaid iomlána i bhfotha gníomhaíochta an snitheora."
   t215: "Ritheann hermes status --deep seiceálacha diagnóiseacha níos doimhne ar gach comhpháirt."
   t216: "Is féidir le tascanna cron script Python (--script) a cheangal a n-instealltar a stdout isteach sa leid mar chomhthéacs."
-  t217: "Tá scripteanna cron in ~/.hermes/scripts/ agus ritheann siad roimh an ngníomhaire — foirfe do phíblínte bailithe sonraí."
+  t217: "Tá scripteanna cron in $HERMES_HOME/scripts/ agus ritheann siad roimh an ngníomhaire — foirfe do phíblínte bailithe sonraí."
   t218: "Instealann prefill_messages_file in config.yaml samplaí few-shot i ngach glao API, gan iad a shábháil sa stair choíche."
   t219: "Cuireann SOUL.md ionad aitheantas réamhshocraithe an ghníomhaire go hiomlán — athscríobh é chun Hermes a dhéanamh mar do chuid féin."
   t220: "Síoltar SOUL.md go huathoibríoch le pearsantacht réamhshocraithe ar an gcéad rith. Cuir in eagar é chun é a shaincheapadh."

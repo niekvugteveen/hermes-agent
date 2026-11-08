@@ -34,3 +34,35 @@ class TestValidateCronScriptPath:
         scripts_dir = get_hermes_home() / "scripts"
         error = _validate_cron_script_path("/etc/passwd")
         assert str(scripts_dir) in error
+
+    def test_absolute_path_error_does_not_tell_the_agent_to_move_the_file(self):
+        # The rejection is about the argument being absolute, not about the file's location: an
+        # agent once moved working scripts out of the real directory after a misleading message.
+        scripts_dir = get_hermes_home() / "scripts"
+        error = _validate_cron_script_path(str(scripts_dir / "job.sh"))
+        assert "do not move it" in error
+        assert "~/.hermes/scripts" not in error
+
+
+def test_cli_help_names_hermes_home_not_the_legacy_directory():
+    import argparse
+
+    from hermes_cli.subcommands.cron import build_cron_parser
+    from hermes_cli.subcommands.webhook import build_webhook_parser
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers()
+    build_cron_parser(sub, cmd_cron=lambda *_a, **_k: None)
+    build_webhook_parser(sub, cmd_webhook=lambda *_a, **_k: None)
+    help_texts = []
+    stack = [parser]
+    while stack:
+        p = stack.pop()
+        for action in p._actions:
+            if action.help:
+                help_texts.append(action.help)
+            if isinstance(action, argparse._SubParsersAction):
+                stack.extend(action.choices.values())
+    joined = "\n".join(help_texts)
+    assert "~/.hermes/scripts" not in joined
+    assert "$HERMES_HOME/scripts" in joined

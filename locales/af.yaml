@@ -3787,7 +3787,7 @@ tips:
   t214: "tool_preview_length: 0 in die konfigurasie wys volledige lêerpaaie in die spinner se aktiwiteitsvoer."
   t215: "hermes status --deep voer dieper diagnostiese kontroles oor alle komponente uit."
   t216: "Cron-take kan 'n Python-skrip (--script) aanheg waarvan die stdout as konteks in die prompt ingespuit word."
-  t217: "Cron-skripte woon in ~/.hermes/scripts/ en loop voor die agent — perfek vir data-insamelingspyplyne."
+  t217: "Cron-skripte woon in $HERMES_HOME/scripts/ en loop voor die agent — perfek vir data-insamelingspyplyne."
   t218: "prefill_messages_file in config.yaml spuit few-shot-voorbeelde in elke API-oproep in, nooit in die geskiedenis gestoor nie."
   t219: "SOUL.md vervang die agent se verstek-identiteit heeltemal — herskryf dit om Hermes jou eie te maak."
   t220: "SOUL.md word by die eerste lopie outomaties met 'n verstek-persoonlikheid gevul. Wysig dit om aan te pas."

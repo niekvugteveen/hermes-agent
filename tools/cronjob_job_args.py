@@ -426,7 +426,8 @@ def _validate_cron_script_path(script: Optional[str]) -> Optional[str]:
         return (
             f"Script path must be relative to {scripts_dir}/. "
             f"Got absolute or home-relative path: {raw!r}. "
-            f"Place scripts in {scripts_dir}/ and use just the filename.")
+            f"Place scripts in {scripts_dir}/ and use just the filename; if the file is already "
+            f"there, pass only its name and do not move it.")
 
     from tools.path_security import validate_within_dir
     scripts_dir.mkdir(parents=True, exist_ok=True)

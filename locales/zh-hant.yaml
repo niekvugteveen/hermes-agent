@@ -3787,7 +3787,7 @@ tips:
   t214: "在設定中將 tool_preview_length: 0 可在轉圈動畫的活動列中顯示完整檔案路徑。"
   t215: "hermes status --deep 會對所有元件執行更深入的診斷檢查。"
   t216: "排程任務可附加 Python 腳本（--script），其 stdout 會作為上下文注入提示。"
-  t217: "排程腳本放在 ~/.hermes/scripts/，會在代理之前執行 — 非常適合資料收集流程。"
+  t217: "排程腳本放在 $HERMES_HOME/scripts/，會在代理之前執行 — 非常適合資料收集流程。"
   t218: "config.yaml 中的 prefill_messages_file 會在每次 API 呼叫注入 few-shot 範例，且絕不寫入歷史。"
   t219: "SOUL.md 會完全取代代理的預設身分 — 重寫它，讓 Hermes 成為你自己的代理。"
   t220: "SOUL.md 會在首次執行時自動填入預設人格。編輯它即可自訂。"
