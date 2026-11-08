@@ -2917,6 +2917,11 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         created_filter = getattr(getattr(filters, "StatusUpdate", None), "FORUM_TOPIC_CREATED", None)
         if created_filter is not None:
             app.add_handler(TelegramMessageHandler(created_filter, self._handle_forum_topic_created))
+        # Catch-all, last among the message handlers so every one above wins the update first. Only
+        # reached when none matched, which PTB otherwise treats as "drop it, say nothing".
+        all_filter = getattr(filters, "ALL", None)
+        if all_filter is not None:
+            app.add_handler(TelegramMessageHandler(all_filter, self._handle_unmatched_message))
         app.add_handler(CallbackQueryHandler(self._handle_callback_query))
         # Inline command picker; inert until the owner enables inline mode via BotFather /setinline.
         app.add_handler(InlineQueryHandler(self._handle_inline_query))
@@ -6489,6 +6494,39 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
     def _effective_update_message(self, update: Update) -> Optional[Message]:
         """Message-like payload for normal messages and channel posts (``update.channel_post``)."""
         return getattr(update, "effective_message", None) or getattr(update, "message", None)
+
+    async def _handle_unmatched_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log message updates no other handler claimed, instead of PTB's silent discard.
+
+        python-telegram-bot models a fixed Bot API version, so a message carrying a field from a newer
+        one (a Bot API 10.1 rich message: table, task list, details, math) arrives with ``text`` unset
+        and its payload parked in ``api_kwargs``. No filter matches and PTB drops the update without a
+        log line: the user's message goes unanswered with no trace. Whatever we cannot parse yet, we
+        can at least refuse to drop quietly."""
+        msg = self._effective_update_message(update)
+        if msg is None:
+            logger.warning("[%s] Unhandled update %s: no message payload", self.name, update.update_id)
+            return
+        chat_id = getattr(getattr(msg, "chat", None), "id", None)
+        # PTB parks fields it has no model for in api_kwargs: the only clue to a newer message type.
+        unmodelled = dict(getattr(msg, "api_kwargs", None) or {})
+        if unmodelled:
+            try:
+                payload = json.dumps(unmodelled, default=str, ensure_ascii=False)[:2000]
+            except Exception:  # pragma: no cover - diagnostics must never raise
+                payload = repr(unmodelled)[:2000]
+            logger.warning(
+                "[%s] Unhandled message update_id=%s chat=%s carries unmodelled Bot API fields %s; "
+                "no handler matched, so it went unanswered. Payload: %s",
+                self.name, update.update_id, chat_id, sorted(unmodelled), payload)
+            return
+        # No unknown fields: an ordinary service message (pins, joins, ...) with nothing to act on.
+        populated = sorted(
+            slot for slot in getattr(msg, "__slots__", ()) or ()
+            if not slot.startswith("_") and getattr(msg, slot, None) is not None)
+        logger.info(
+            "[%s] Ignoring unhandled message update_id=%s chat=%s fields=%s",
+            self.name, update.update_id, chat_id, populated)
 
     def _log_blocked_user(self, msg, *, level=logging.WARNING, what: str = "unauthorized user") -> None:
         logger.log(
