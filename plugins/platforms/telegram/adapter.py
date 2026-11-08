@@ -707,7 +707,12 @@ class TelegramAdapter(TelegramHeldInboundMixin, TelegramTopicRoutingMixin, BaseP
         # chat_ids with DM topics configured (O(1) root-DM ignore check)
         self._dm_topic_chat_ids: set[str] = {str(e["chat_id"]) for e in self._dm_topics_config if "chat_id" in e}
         # getFile cap: 20MB on the public Bot API, 2GB on a local telegram-bot-api (base_url).
-        self._max_doc_bytes: int = 2 * 1024 * 1024 * 1024 if extra.get("base_url") else 20 * 1024 * 1024
+        # 2GB is a protocol ceiling, not a memory budget: the media handlers buffer the whole
+        # download (and copy it again), so peak RSS is roughly 2x the file size. Pin a ceiling that
+        # fits the host with extra.max_doc_bytes (bytes, min 1MB).
+        self._max_doc_bytes: int = int(self._coerce_float_extra(
+            "max_doc_bytes", 2 * 1024 * 1024 * 1024 if extra.get("base_url") else 20 * 1024 * 1024,
+            min_value=1024 * 1024))
         self._model_picker_state: dict[str, dict] = {}  # per-chat interactive picker state
         self._choice_picker_state: dict[str, dict] = {}
         self._approval_state: dict[int, str] = {}  # message_id → session_key

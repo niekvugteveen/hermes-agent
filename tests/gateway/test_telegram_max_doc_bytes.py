@@ -21,3 +21,20 @@ def test_max_doc_bytes_raised_to_2gb_when_base_url_set():
     assert adapter._max_doc_bytes == 2 * 1024 * 1024 * 1024
 
 
+
+
+def _adapter(extra):
+    return TelegramAdapter(PlatformConfig(enabled=True, token="***", extra=extra))
+
+
+def test_max_doc_bytes_override_pins_a_lower_ceiling_on_local_api():
+    adapter = _adapter({"base_url": "http://localhost:8081/bot", "max_doc_bytes": 512 * 1024 * 1024})
+    assert adapter._max_doc_bytes == 512 * 1024 * 1024
+
+
+def test_max_doc_bytes_override_has_a_1mb_floor():
+    assert _adapter({"max_doc_bytes": 10})._max_doc_bytes == 1024 * 1024
+
+
+def test_max_doc_bytes_unparseable_falls_back_to_default():
+    assert _adapter({"max_doc_bytes": "lots"})._max_doc_bytes == 20 * 1024 * 1024
