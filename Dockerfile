@@ -5,7 +5,12 @@
 # Pinned by the multi-arch index digest: uv and node already come from pm's
 # sha-verified lock, and a tag alone would let the base drift under them.
 
-FROM debian:trixie-20261020@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS sqlite_build
+# homelab: track the debian:13 tag instead of upstream's dated snapshot digest, so a
+# rebuild (Komodo builds with --pull) picks up Debian security updates. A frozen
+# base left the runtime with ~180 fixable HIGH OS CVEs (util-linux, expat, curl,
+# openssl). Both stages name the same tag, so one build still resolves them to
+# the same image and the built libsqlite matches the runtime libc.
+FROM debian:13 AS sqlite_build
 ARG SQLITE_AUTOCONF_VERSION=3530400
 ARG SQLITE_SHA256=0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c
 RUN apt-get -o Acquire::Retries=3 update && \
@@ -44,7 +49,7 @@ RUN apt-get -o Acquire::Retries=3 update && \
     make install
 
 # Same digest as sqlite_build: the built libsqlite must match this libc.
-FROM debian:trixie-20261020@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS runtime_base
+FROM debian:13 AS runtime_base
 
 # Disable Python stdout buffering to ensure logs are printed immediately.
 # Do not write .pyc files at runtime: /opt/hermes is immutable in the
@@ -74,11 +79,12 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/tools
 # must be declared here. The list is the `ldd ... | grep "not found"` set of
 # the pinned chrome binary in this base image, mapped to trixie package
 # names (see .hermes/plans/termux-removal-commit-spec.md).
+# homelab: notmuch serves the agent's mail search over the read-only Maildir.
 # tmux backs the hermes-agent skill's interactive spawning recipe; the runtime
 # user cannot apt-get it later (no root, and the root fs resets on restart).
 RUN apt-get -o Acquire::Retries=3 update && \
     apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-    ca-certificates curl iputils-ping python3 python-is-python3 gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps git openssh-client docker-cli xz-utils tmux \
+    ca-certificates curl iputils-ping python3 python-is-python3 gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps git openssh-client docker-cli xz-utils tmux notmuch \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 && \
     rm -rf /var/lib/apt/lists/*
 
@@ -298,11 +304,15 @@ RUN touch ./README.md
 # Do not leave the cache at its default: HERMES_HOME is not set yet in this
 # stage, so the default is /root/.hermes/cache/uv, which nothing reads. A plugin
 # install then runs with an empty cache and builds python-olm from source.
+# homelab: [firecrawl] (web extract against our self-hosted Firecrawl) and
+# [hindsight] (client for the vendored plugins/memory/hindsight provider) are
+# baked so neither needs a first-boot install into /opt/data/installs.
 RUN python3 -m pm.build_env --source /opt/hermes --python /usr/local/bin/python3 \
     --cache /opt/hermes/uv-cache \
     --out /opt/hermes/.venv --no-install-project --sealed --record-selection \
     --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock \
-    --extra azure-identity --extra matrix --extra google-chat --extra fal --extra documents
+    --extra azure-identity --extra matrix --extra google-chat --extra fal --extra documents \
+    --extra firecrawl --extra hindsight
 
 # Icons render on the runtime environment: Pillow and resvg-py are core
 # dependencies. A stage of its own so the frontend stage keeps building its
